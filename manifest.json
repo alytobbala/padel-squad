@@ -1,6 +1,6 @@
 {
-  "name": "PadelSquad",
-  "short_name": "PadelSquad",
+  "name": "PadelCave",
+  "short_name": "PadelCave",
   "description": "Track your padel group sessions and balances",
   "start_url": "./index.html",
   "display": "standalone",

@@ -2,7 +2,7 @@
   "name": "PadelSquad",
   "short_name": "PadelSquad",
   "description": "Track your padel group sessions and balances",
-  "start_url": "./padel-tracker.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",

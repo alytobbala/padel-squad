@@ -270,6 +270,49 @@
     display: flex; align-items: center; gap: 8px; margin-top: 16px; width: 100%;
   }
   .settings-link:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* SETTLE UP */
+  .tx-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 10px;
+  }
+  .tx-card.settled { opacity: 0.45; }
+  .tx-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tx-players { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .tx-from { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; color: var(--danger); }
+  .tx-arrow { color: var(--muted); font-size: 14px; flex-shrink: 0; }
+  .tx-to { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; color: var(--accent); }
+  .tx-amount { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; color: var(--text); flex-shrink: 0; }
+  .tx-card.settled .tx-amount { color: var(--muted); }
+  .pay-btn {
+    margin-top: 12px; width: 100%;
+    background: var(--accent); color: #0a0a0a; border: none;
+    border-radius: 8px; padding: 10px;
+    font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .pay-btn:hover { opacity: 0.85; }
+  .settled-badge {
+    margin-top: 10px; width: 100%; text-align: center;
+    font-size: 11px; color: var(--muted); letter-spacing: 0.5px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .undo-btn {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-family: 'DM Mono', monospace; font-size: 11px; text-decoration: underline;
+  }
+  .undo-btn:hover { color: var(--danger); }
+
+  .hist-item {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-players { color: var(--text); }
+  .hist-players span { color: var(--muted); }
+  .hist-right { text-align: right; }
+  .hist-amount { font-family: 'Syne', sans-serif; font-weight: 700; color: var(--accent2); }
+  .hist-date { font-size: 10px; color: var(--muted); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -449,6 +492,15 @@ async function loadSessions() {
   }
 }
 
+async function loadPayments() {
+  try {
+    const data = await dbFetch('payments?select=*&order=paid_at.asc');
+    payments = data || [];
+  } catch(e) {
+    payments = [];
+  }
+}
+
 async function insertSession(session) {
   return dbFetch('sessions', {
     method: 'POST',
@@ -473,8 +525,24 @@ async function deleteSession(id) {
   });
 }
 
+async function insertPayment(from_player, to_player, amount, note) {
+  return dbFetch('payments', {
+    method: 'POST',
+    body: JSON.stringify({ from_player, to_player, amount, note }),
+    prefer: 'return=representation'
+  });
+}
+
+async function removePayment(id) {
+  return dbFetch(`payments?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { 'Prefer': 'return=minimal' }
+  });
+}
+
 // ── STATE ──────────────────────────────────────────────────────────
 let sessions = [];
+let payments = [];
 let editingId = null;
 let playerPresence = {};
 let subRows = [];
@@ -587,25 +655,131 @@ function renderSessions() {
 function renderSettle() {
   const adj = calcBalances();
   const content = document.getElementById('settle-content');
+
   if (sessions.length === 0) {
     content.innerHTML = `<div class="empty-state"><div class="emoji">💰</div><p>Log some sessions first.</p></div>`;
     return;
   }
-  content.innerHTML = '';
-  const sorted = [...PLAYERS].sort((a, b) => adj[b] - adj[a]);
-  for (const p of sorted) {
-    const val = adj[p];
-    if (Math.abs(val) < 0.01) {
-      content.innerHTML += `<div class="settlement-card"><div class="settlement-label">${p}</div><div class="settlement-amount" style="color:var(--muted)">All square ✓</div></div>`;
-    } else if (val > 0) {
-      content.innerHTML += `<div class="settlement-card receive"><div class="settlement-label">${p} — should receive</div><div class="settlement-amount">+€${val.toFixed(2)}</div><div class="settlement-detail">Missed sessions → others covered their share</div></div>`;
-    } else {
-      content.innerHTML += `<div class="settlement-card owe"><div class="settlement-label">${p} — paid extra for absent players</div><div class="settlement-amount">-€${Math.abs(val).toFixed(2)}</div><div class="settlement-detail">Attended while others were absent</div></div>`;
+
+  // Compute minimal transactions using a debt-settling algorithm
+  // Net balances: positive = owed money back, negative = owes extra
+  const balances = {};
+  PLAYERS.forEach(p => balances[p] = adj[p]);
+
+  // Account for already-recorded payments
+  for (const pay of payments) {
+    if (balances[pay.from_player] !== undefined) balances[pay.from_player] += pay.amount;
+    if (balances[pay.to_player] !== undefined) balances[pay.to_player] -= pay.amount;
+  }
+
+  // Generate minimal transactions
+  const transactions = [];
+  const debtors = PLAYERS.filter(p => balances[p] < -0.01).map(p => ({ name: p, amt: -balances[p] })).sort((a,b) => b.amt - a.amt);
+  const creditors = PLAYERS.filter(p => balances[p] > 0.01).map(p => ({ name: p, amt: balances[p] })).sort((a,b) => b.amt - a.amt);
+
+  const d = debtors.map(x => ({ ...x }));
+  const c = creditors.map(x => ({ ...x }));
+
+  while (d.length && c.length) {
+    const pay = Math.min(d[0].amt, c[0].amt);
+    transactions.push({ from: d[0].name, to: c[0].name, amount: pay });
+    d[0].amt -= pay; c[0].amt -= pay;
+    if (d[0].amt < 0.01) d.shift();
+    if (c[0].amt < 0.01) c.shift();
+  }
+
+  // Settled transactions (from payments table, grouped by from+to)
+  const paidMap = {};
+  for (const pay of payments) {
+    const key = `${pay.from_player}→${pay.to_player}`;
+    paidMap[key] = (paidMap[key] || 0) + pay.amount;
+  }
+
+  let html = '';
+
+  if (transactions.length === 0) {
+    html += `<div class="tx-card" style="text-align:center;padding:24px;">
+      <div style="font-size:28px;margin-bottom:8px;">✅</div>
+      <div style="font-family:'Syne',sans-serif;font-weight:700;color:var(--accent);">All settled up!</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">No outstanding balances.</div>
+    </div>`;
+  } else {
+    html += `<div class="section-title" style="margin-bottom:10px;">Pending Payments</div>`;
+    for (const tx of transactions) {
+      html += `
+        <div class="tx-card">
+          <div class="tx-row">
+            <div class="tx-players">
+              <span class="tx-from">${tx.from}</span>
+              <span class="tx-arrow">→</span>
+              <span class="tx-to">${tx.to}</span>
+            </div>
+            <div class="tx-amount">€${tx.amount.toFixed(2)}</div>
+          </div>
+          <button class="pay-btn" onclick="markPaid('${tx.from}','${tx.to}',${tx.amount.toFixed(2)})">
+            ✓ Mark as Paid
+          </button>
+        </div>`;
     }
   }
-  content.innerHTML += `<div class="info-box" style="margin-top:16px;">💡 These are net top-up/refund amounts from redistribution only. Initial €205.20 payments are separate.</div>`;
-  // Settings reset link
-  content.innerHTML += `<button class="settings-link" onclick="showConfigScreen()">⚙️ Change Supabase connection</button>`;
+
+  // Payment history
+  if (payments.length > 0) {
+    html += `<div class="section-title" style="margin-top:24px;margin-bottom:10px;">Payment History</div>`;
+    html += `<div class="stat-card" style="margin-bottom:20px;">`;
+    for (const pay of [...payments].reverse()) {
+      html += `
+        <div class="hist-item">
+          <div class="hist-players">
+            <strong>${pay.from_player}</strong> <span>paid</span> <strong>${pay.to_player}</strong>
+            ${pay.note ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">${pay.note}</div>` : ''}
+          </div>
+          <div class="hist-right">
+            <div class="hist-amount">€${Number(pay.amount).toFixed(2)}</div>
+            <div class="hist-date">${formatDate(pay.paid_at ? pay.paid_at.split('T')[0] : '')}</div>
+            <button class="undo-btn" onclick="undoPayment('${pay.id}')">undo</button>
+          </div>
+        </div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="info-box">💡 Balances update automatically as you log sessions. Mark payments as paid to track settlements in real time.</div>`;
+  html += `<button class="settings-link" onclick="showConfigScreen()">⚙️ Change Supabase connection</button>`;
+  content.innerHTML = html;
+}
+
+async function markPaid(from, to, amount) {
+  setSyncing(); startLoading();
+  try {
+    await insertPayment(from, to, amount, '');
+    await loadPayments();
+    showToast(`${from} → ${to} marked paid ✓`, 'success');
+    renderSettle();
+    setSynced();
+  } catch(e) {
+    showToast('Failed to record payment', 'error');
+    setSyncError();
+  } finally {
+    stopLoading();
+  }
+}
+
+async function undoPayment(id) {
+  if (!confirm('Undo this payment?')) return;
+  setSyncing(); startLoading();
+  try {
+    await removePayment(id);
+    await loadPayments();
+    showToast('Payment undone', '');
+    renderSettle();
+    setSynced();
+  } catch(e) {
+    showToast('Failed to undo', 'error');
+    setSyncError();
+  } finally {
+    stopLoading();
+  }
 }
 
 // ── MODAL ──────────────────────────────────────────────────────────
@@ -765,6 +939,7 @@ function showConfigScreen() {
 async function init() {
   startLoading();
   const ok = await loadSessions();
+  await loadPayments();
   stopLoading();
   if (ok) renderAll();
 }

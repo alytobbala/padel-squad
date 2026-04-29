@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PadelSquad">
+<link rel="manifest" href="manifest.json">
+<title>Padel Squad</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface2: #1e1e1e;
+    --border: #2a2a2a;
+    --accent: #c8f55a;
+    --accent2: #5af5c8;
+    --danger: #f55a5a;
+    --text: #f0f0f0;
+    --muted: #666;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  header {
+    padding: 24px 20px 16px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .logo { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: var(--accent); }
+
+  .session-badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .session-badge strong { color: var(--accent); }
+
+  nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    z-index: 100;
+  }
+
+  nav button {
+    flex: 1;
+    padding: 14px 8px 18px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.2s;
+    letter-spacing: 0.5px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  nav button svg { width: 20px; height: 20px; }
+  nav button.active { color: var(--accent); }
+
+  .page { display: none; padding: 20px; }
+  .page.active { display: block; }
+
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .balance-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+
+  .balance-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .balance-card.positive { border-color: #3a4a1a; }
+  .balance-card.negative { border-color: #4a1a1a; }
+
+  .player-info { display: flex; align-items: center; gap: 12px; }
+
+  .avatar {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-size: 13px; font-weight: 700;
+    color: var(--accent);
+  }
+
+  .player-name { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; }
+  .player-sessions { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .balance-amount { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; }
+  .balance-amount.pos { color: var(--accent); }
+  .balance-amount.neg { color: var(--danger); }
+  .balance-amount.zero { color: var(--muted); }
+
+  .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 28px; }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .stat-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat-value { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: var(--accent); }
+  .stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  .progress-bar { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; margin-top: 8px; }
+  .progress-fill { background: var(--accent); height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+
+  .add-btn {
+    width: 100%;
+    background: var(--accent);
+    color: #0a0a0a;
+    border: none;
+    border-radius: var(--radius);
+    padding: 14px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer;
+    margin-bottom: 20px;
+    transition: opacity 0.2s;
+  }
+  .add-btn:hover { opacity: 0.85; }
+
+  .sessions-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .session-card:hover { border-color: var(--accent); }
+
+  .session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .session-num { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 800; }
+  .session-date { font-size: 11px; color: var(--muted); }
+  .players-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .player-chip { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; border: 1px solid var(--border); }
+  .player-chip.present { background: #1a2a0a; border-color: #3a5a1a; color: var(--accent); }
+  .player-chip.absent { background: #2a1a1a; border-color: #5a2a2a; color: var(--danger); }
+  .player-chip.sub { background: #0a1a2a; border-color: #1a3a5a; color: var(--accent2); }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 200;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    padding: 24px 20px 40px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .modal-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px; font-weight: 800;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .close-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .form-label { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; display: block; }
+  .form-group { margin-bottom: 18px; }
+
+  input[type="date"], input[type="text"] {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: var(--accent); }
+
+  .player-toggles { display: flex; flex-direction: column; gap: 8px; }
+
+  .player-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .player-toggle.present { border-color: #3a5a1a; background: #1a2a0a; }
+  .player-toggle.absent { border-color: #5a2a2a; background: #2a1a1a; }
+
+  .toggle-name { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 600; }
+  .toggle-status { font-size: 11px; padding: 3px 10px; border-radius: 20px; }
+  .toggle-status.present { background: #3a5a1a; color: var(--accent); }
+  .toggle-status.absent { background: #5a2a2a; color: var(--danger); }
+
+  .sub-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .sub-row input { flex: 1; }
+
+  .remove-sub {
+    background: #2a1a1a;
+    border: 1px solid #5a2a2a;
+    color: var(--danger);
+    border-radius: 6px;
+    padding: 10px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .add-sub-btn {
+    background: none;
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 10px;
+    width: 100%;
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+  .add-sub-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  .save-btn {
+    width: 100%;
+    background: var(--accent);
+    color: #0a0a0a;
+    border: none;
+    border-radius: var(--radius);
+    padding: 14px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+
+  .delete-btn {
+    background: #2a1a1a;
+    border: 1px solid #5a2a2a;
+    color: var(--danger);
+    border-radius: 8px;
+    padding: 10px 16px;
+    cursor: pointer;
+    font-family: 'Syne', sans-serif;
+    font-size: 12px; font-weight: 600;
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .calculation-preview {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--muted);
+  }
+  .calc-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--text);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .calc-row { display: flex; justify-content: space-between; }
+  .calc-row.highlight { color: var(--accent); }
+  .calc-row.danger { color: var(--danger); }
+
+  .settlement-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 10px;
+  }
+  .settlement-card.owe { border-color: #5a2a2a; }
+  .settlement-card.receive { border-color: #3a5a1a; }
+  .settlement-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .settlement-amount { font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 800; }
+  .settlement-card.owe .settlement-amount { color: var(--danger); }
+  .settlement-card.receive .settlement-amount { color: var(--accent); }
+  .settlement-detail { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty-state .emoji { font-size: 40px; margin-bottom: 12px; }
+  .empty-state p { font-size: 13px; line-height: 1.6; }
+
+  .info-box {
+    background: #0a1a0a;
+    border: 1px solid #1a3a1a;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #6a9a6a;
+    line-height: 1.7;
+    margin-bottom: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Padel<span>Squad</span></div>
+  <div class="session-badge">Session <strong id="hdr-count">0</strong> / 18</div>
+</header>
+
+<div id="page-dashboard" class="page active">
+  <div style="margin-bottom:20px;">
+    <div class="section-title">Overview</div>
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Sessions Played</div>
+        <div class="stat-value" id="stat-sessions">0</div>
+        <div class="stat-sub">of 18 total</div>
+        <div class="progress-bar"><div class="progress-fill" id="stat-progress" style="width:0%"></div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cost / Session</div>
+        <div class="stat-value">€55.56</div>
+        <div class="stat-sub">€11.11 per player</div>
+      </div>
+    </div>
+  </div>
+  <div class="section-title">Player Balances</div>
+  <div class="balance-grid" id="balance-grid"></div>
+  <div class="info-box">
+    💡 <strong>How it works:</strong> Each player paid €200 upfront. When someone misses a session, all present players (including any subs) split the absent player's share equally. Absent players are fully refunded their slot.
+  </div>
+</div>
+
+<div id="page-sessions" class="page">
+  <button class="add-btn" onclick="openAddSession()">+ Log New Session</button>
+  <div class="section-title">Session History</div>
+  <div class="sessions-list" id="sessions-list">
+    <div class="empty-state">
+      <div class="emoji">🎾</div>
+      <p>No sessions logged yet.<br>Tap the button above to add your first session.</p>
+    </div>
+  </div>
+</div>
+
+<div id="page-settle" class="page">
+  <div class="section-title">Settlement Summary</div>
+  <div id="settle-content"></div>
+</div>
+
+<nav>
+  <button class="active" onclick="showPage('dashboard', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    Dashboard
+  </button>
+  <button onclick="showPage('sessions', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+    Sessions
+  </button>
+  <button onclick="showPage('settle', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    Settle Up
+  </button>
+</nav>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-title">
+      <span id="modal-title-text">Log Session</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input type="date" id="session-date">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Who Played? (tap to toggle)</label>
+      <div class="player-toggles" id="player-toggles"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Substitutes</label>
+      <div id="subs-list"></div>
+      <button class="add-sub-btn" onclick="addSubRow()">+ Add substitute</button>
+    </div>
+    <div class="calculation-preview" id="calc-preview">
+      <div class="calc-title">Cost Breakdown</div>
+      <div id="calc-content">Tap players to see breakdown.</div>
+    </div>
+    <button class="save-btn" onclick="saveSession()">Save Session</button>
+    <button class="delete-btn" id="delete-btn" style="display:none" onclick="deleteCurrentSession()">Delete Session</button>
+  </div>
+</div>
+
+<script>
+const PLAYERS = ['Aly', 'Islam', 'Gomaa', 'Hadi', 'Tarek'];
+const SESSION_COST = 1000 / 18;
+const PER_PERSON = SESSION_COST / 5;
+
+let state = { sessions: [] };
+let editingIndex = null;
+let playerPresence = {};
+let subRows = [];
+
+function loadState() {
+  try {
+    const s = localStorage.getItem('padel-squad-v2');
+    if (s) state = JSON.parse(s);
+  } catch(e) {}
+}
+
+function saveState() {
+  localStorage.setItem('padel-squad-v2', JSON.stringify(state));
+}
+
+function calcBalances() {
+  const adj = {};
+  PLAYERS.forEach(p => adj[p] = 0);
+
+  for (const session of state.sessions) {
+    const absent = PLAYERS.filter(p => !session.present.includes(p));
+    const numPresent = session.present.length + (session.subs ? session.subs.length : 0);
+    const numAbsent = absent.length;
+    if (numAbsent === 0) continue;
+
+    const absentCost = numAbsent * PER_PERSON;
+    const extraPerPresent = numPresent > 0 ? absentCost / numPresent : 0;
+
+    for (const p of session.present) adj[p] -= extraPerPresent;
+    for (const p of absent) adj[p] += PER_PERSON;
+  }
+  return adj;
+}
+
+function renderDashboard() {
+  const adj = calcBalances();
+  const n = state.sessions.length;
+  document.getElementById('stat-sessions').textContent = n;
+  document.getElementById('stat-progress').style.width = (n / 18 * 100) + '%';
+  document.getElementById('hdr-count').textContent = n;
+
+  const grid = document.getElementById('balance-grid');
+  grid.innerHTML = '';
+  for (const p of PLAYERS) {
+    const val = adj[p];
+    const sessions = state.sessions.filter(s => s.present.includes(p)).length;
+    const cls = val > 0.01 ? 'positive' : val < -0.01 ? 'negative' : '';
+    const amtCls = val > 0.01 ? 'pos' : val < -0.01 ? 'neg' : 'zero';
+    const sign = val > 0.01 ? '+' : '';
+    grid.innerHTML += `
+      <div class="balance-card ${cls}">
+        <div class="player-info">
+          <div class="avatar">${p[0]}</div>
+          <div>
+            <div class="player-name">${p}</div>
+            <div class="player-sessions">${sessions} session${sessions !== 1 ? 's' : ''} attended</div>
+          </div>
+        </div>
+        <div class="balance-amount ${amtCls}">${sign}€${Math.abs(val).toFixed(2)}</div>
+      </div>`;
+  }
+}
+
+function renderSessions() {
+  const list = document.getElementById('sessions-list');
+  if (state.sessions.length === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="emoji">🎾</div><p>No sessions logged yet.<br>Tap the button above to add your first session.</p></div>`;
+    return;
+  }
+  list.innerHTML = '';
+  state.sessions.slice().reverse().forEach((s, ri) => {
+    const i = state.sessions.length - 1 - ri;
+    const absent = PLAYERS.filter(p => !s.present.includes(p));
+    const chips = s.present.map(p => `<span class="player-chip present">${p}</span>`).join('');
+    const absentChips = absent.map(p => `<span class="player-chip absent">${p}</span>`).join('');
+    const subChips = (s.subs || []).map(sub => `<span class="player-chip sub">${sub.name}</span>`).join('');
+    list.innerHTML += `
+      <div class="session-card" onclick="openEditSession(${i})">
+        <div class="session-header">
+          <div class="session-num">Session ${i + 1}</div>
+          <div class="session-date">${formatDate(s.date)}</div>
+        </div>
+        <div class="players-row">${chips}${absentChips}${subChips}</div>
+      </div>`;
+  });
+}
+
+function renderSettle() {
+  const adj = calcBalances();
+  const content = document.getElementById('settle-content');
+  if (state.sessions.length === 0) {
+    content.innerHTML = `<div class="empty-state"><div class="emoji">💰</div><p>Log some sessions first to see who owes what.</p></div>`;
+    return;
+  }
+  content.innerHTML = '';
+  const sorted = [...PLAYERS].sort((a, b) => adj[b] - adj[a]);
+  for (const p of sorted) {
+    const val = adj[p];
+    if (Math.abs(val) < 0.01) {
+      content.innerHTML += `<div class="settlement-card"><div class="settlement-label">${p}</div><div class="settlement-amount" style="color:var(--muted)">All square ✓</div></div>`;
+    } else if (val > 0) {
+      content.innerHTML += `<div class="settlement-card receive"><div class="settlement-label">${p} — should receive</div><div class="settlement-amount">+€${val.toFixed(2)}</div><div class="settlement-detail">Missed sessions → others covered their share</div></div>`;
+    } else {
+      content.innerHTML += `<div class="settlement-card owe"><div class="settlement-label">${p} — paid extra to cover absent players</div><div class="settlement-amount">-€${Math.abs(val).toFixed(2)}</div><div class="settlement-detail">Attended while others were absent</div></div>`;
+    }
+  }
+  content.innerHTML += `<div class="info-box" style="margin-top:16px;">💡 These are net top-up/refund amounts only. The initial €200 each person paid is separate.</div>`;
+}
+
+function openAddSession() {
+  editingIndex = null;
+  playerPresence = {};
+  PLAYERS.forEach(p => playerPresence[p] = true);
+  subRows = [];
+  document.getElementById('session-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('modal-title-text').textContent = 'Log Session';
+  document.getElementById('delete-btn').style.display = 'none';
+  renderPlayerToggles();
+  renderSubRows();
+  updateCalcPreview();
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function openEditSession(i) {
+  const s = state.sessions[i];
+  editingIndex = i;
+  playerPresence = {};
+  PLAYERS.forEach(p => playerPresence[p] = s.present.includes(p));
+  subRows = (s.subs || []).map(sub => ({ name: sub.name }));
+  document.getElementById('session-date').value = s.date;
+  document.getElementById('modal-title-text').textContent = `Session ${i + 1}`;
+  document.getElementById('delete-btn').style.display = 'block';
+  renderPlayerToggles();
+  renderSubRows();
+  updateCalcPreview();
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+function togglePlayer(name) {
+  playerPresence[name] = !playerPresence[name];
+  renderPlayerToggles();
+  updateCalcPreview();
+}
+
+function renderPlayerToggles() {
+  const container = document.getElementById('player-toggles');
+  container.innerHTML = '';
+  for (const p of PLAYERS) {
+    const present = playerPresence[p];
+    container.innerHTML += `
+      <div class="player-toggle ${present ? 'present' : 'absent'}" onclick="togglePlayer('${p}')">
+        <span class="toggle-name">${p}</span>
+        <span class="toggle-status ${present ? 'present' : 'absent'}">${present ? 'Playing ✓' : 'Absent'}</span>
+      </div>`;
+  }
+}
+
+function addSubRow() {
+  subRows.push({ name: '' });
+  renderSubRows();
+  updateCalcPreview();
+}
+
+function removeSubRow(i) {
+  subRows.splice(i, 1);
+  renderSubRows();
+  updateCalcPreview();
+}
+
+function renderSubRows() {
+  const container = document.getElementById('subs-list');
+  container.innerHTML = '';
+  subRows.forEach((sub, i) => {
+    container.innerHTML += `
+      <div class="sub-row">
+        <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview()">
+        <button class="remove-sub" onclick="removeSubRow(${i})">✕</button>
+      </div>`;
+  });
+}
+
+function updateCalcPreview() {
+  const present = PLAYERS.filter(p => playerPresence[p]);
+  const absent = PLAYERS.filter(p => !playerPresence[p]);
+  const subs = subRows.filter(s => s.name.trim());
+  const totalPresent = present.length + subs.length;
+  const numAbsent = absent.length;
+  const content = document.getElementById('calc-content');
+
+  if (numAbsent === 0) {
+    content.innerHTML = `<div class="calc-row highlight">All 5 players — no redistribution ✓</div>`;
+    return;
+  }
+
+  const extraPerPresent = totalPresent > 0 ? (numAbsent * PER_PERSON) / totalPresent : 0;
+  let html = `<div class="calc-row"><span>Base per player</span><span>€${PER_PERSON.toFixed(2)}</span></div>`;
+  html += `<hr style="border-color:var(--border);margin:6px 0">`;
+  html += `<div class="calc-row danger"><span>Absent: ${absent.join(', ')}</span></div>`;
+  html += `<div class="calc-row highlight"><span>Each absent gets back</span><span>+€${PER_PERSON.toFixed(2)}</span></div>`;
+  html += `<div class="calc-row danger"><span>Each present pays extra</span><span>-€${extraPerPresent.toFixed(2)}</span></div>`;
+  if (subs.length > 0) {
+    html += `<div class="calc-row" style="color:var(--accent2)"><span>Subs: ${subs.map(s => s.name).join(', ')}</span></div>`;
+  }
+  content.innerHTML = html;
+}
+
+function saveSession() {
+  const date = document.getElementById('session-date').value;
+  if (!date) { alert('Please select a date.'); return; }
+  const present = PLAYERS.filter(p => playerPresence[p]);
+  if (present.length === 0) { alert('At least one player must be present.'); return; }
+  const subs = subRows.filter(s => s.name.trim()).map(s => ({ name: s.name.trim() }));
+  const session = { date, present, subs };
+
+  if (editingIndex !== null) {
+    state.sessions[editingIndex] = session;
+  } else {
+    state.sessions.push(session);
+    state.sessions.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  saveState();
+  closeModal();
+  renderAll();
+}
+
+function deleteCurrentSession() {
+  if (editingIndex === null) return;
+  if (!confirm('Delete this session? This cannot be undone.')) return;
+  state.sessions.splice(editingIndex, 1);
+  saveState();
+  closeModal();
+  renderAll();
+}
+
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  btn.classList.add('active');
+  renderAll();
+}
+
+function renderAll() {
+  renderDashboard();
+  renderSessions();
+  renderSettle();
+}
+
+function formatDate(str) {
+  if (!str) return '';
+  return new Date(str + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+document.getElementById('modal-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+loadState();
+renderAll();
+</script>
+</body>
+</html>

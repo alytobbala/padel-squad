@@ -26,8 +26,8 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'DM Mono', monospace; min-height: 100vh; padding-bottom: 80px; }
 
-  /* CONFIG SCREEN */
-  .config-screen {
+  /* LOGIN SCREEN */
+  .login-screen {
     display: none;
     position: fixed;
     inset: 0;
@@ -38,24 +38,26 @@
     justify-content: center;
     gap: 20px;
   }
-  .config-screen.show { display: flex; }
-  .config-logo { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 8px; }
-  .config-logo span { color: var(--accent); }
-  .config-sub { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 8px; }
-  .config-label { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; display: block; }
-  .config-input {
+  .login-screen.show { display: flex; }
+  .login-logo { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; margin-bottom: 4px; }
+  .login-logo span { color: var(--accent); }
+  .login-sub { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+  .login-label { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; display: block; }
+  .login-input {
     width: 100%; background: var(--surface2); border: 1px solid var(--border);
     border-radius: 8px; padding: 14px 12px; color: var(--text);
-    font-family: 'DM Mono', monospace; font-size: 13px; outline: none;
+    font-family: 'DM Mono', monospace; font-size: 14px; outline: none;
     transition: border-color 0.2s; margin-bottom: 14px;
   }
-  .config-input:focus { border-color: var(--accent); }
-  .config-btn {
+  .login-input:focus { border-color: var(--accent); }
+  .login-btn {
     width: 100%; background: var(--accent); color: #0a0a0a; border: none;
     border-radius: var(--radius); padding: 16px;
     font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; cursor: pointer;
+    transition: opacity 0.2s;
   }
-  .config-err { font-size: 12px; color: var(--danger); text-align: center; min-height: 18px; }
+  .login-btn:hover { opacity: 0.85; }
+  .login-err { font-size: 12px; color: var(--danger); text-align: center; min-height: 18px; }
 
   /* TOAST */
   .toast {
@@ -320,19 +322,19 @@
 <div class="loading-bar" id="loading-bar"></div>
 <div class="toast" id="toast"></div>
 
-<!-- CONFIG SCREEN -->
-<div class="config-screen" id="config-screen">
+<!-- LOGIN SCREEN -->
+<div class="login-screen" id="login-screen">
   <div>
-    <div class="config-logo">Padel<span>Cave</span></div>
-    <div class="config-sub">Connect to your Supabase project to sync data across all players.</div>
+    <div class="login-logo">Padel<span>Cave</span></div>
+    <div class="login-sub">Members only. Enter your credentials to continue.</div>
   </div>
   <div>
-    <label class="config-label">Supabase Project URL</label>
-    <input class="config-input" id="cfg-url" type="text" placeholder="https://xxxx.supabase.co" autocomplete="off" spellcheck="false">
-    <label class="config-label">Supabase Anon Key</label>
-    <input class="config-input" id="cfg-key" type="text" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." autocomplete="off" spellcheck="false">
-    <div class="config-err" id="cfg-err"></div>
-    <button class="config-btn" onclick="saveConfig()">Connect & Start</button>
+    <label class="login-label">Username</label>
+    <input class="login-input" id="login-user" type="text" placeholder="username" autocomplete="username" autocapitalize="none">
+    <label class="login-label">Password</label>
+    <input class="login-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    <div class="login-err" id="login-err"></div>
+    <button class="login-btn" onclick="doLogin()">Enter</button>
   </div>
 </div>
 
@@ -433,30 +435,37 @@ const SESSIONS_TOTAL = 18;
 const SESSION_COST = 57.00;  // 205.20 * 5 / 18 = 57.00
 const PER_PERSON = SESSION_COST / 5; // 11.40
 
-// ── SUPABASE CONFIG ────────────────────────────────────────────────
-let SUPA_URL = '';
-let SUPA_KEY = '';
+// ── CREDENTIALS (hardcoded) ────────────────────────────────────────
+const SUPA_URL = 'https://znajxklnxurfalkmsams.supabase.co';
+const SUPA_KEY = 'sb_publishable_fJm4cIx1W_AVdR2zsySkVA_3FErtL19';
+const AUTH = { user: 'mancave', pass: 'mancave' };
 
-function loadConfig() {
-  SUPA_URL = localStorage.getItem('ps-url') || '';
-  SUPA_KEY = localStorage.getItem('ps-key') || '';
-  return SUPA_URL && SUPA_KEY;
+// ── LOGIN ──────────────────────────────────────────────────────────
+function checkLogin() {
+  return sessionStorage.getItem('pc-auth') === '1';
 }
 
-function saveConfig() {
-  const url = document.getElementById('cfg-url').value.trim().replace(/\/$/, '');
-  const key = document.getElementById('cfg-key').value.trim();
-  const err = document.getElementById('cfg-err');
-  if (!url.startsWith('https://')) { err.textContent = 'URL must start with https://'; return; }
-  if (key.length < 20) { err.textContent = 'Anon key looks too short'; return; }
-  err.textContent = '';
-  localStorage.setItem('ps-url', url);
-  localStorage.setItem('ps-key', key);
-  SUPA_URL = url;
-  SUPA_KEY = key;
-  document.getElementById('config-screen').classList.remove('show');
-  init();
+function doLogin() {
+  const u = document.getElementById('login-user').value.trim().toLowerCase();
+  const p = document.getElementById('login-pass').value;
+  if (u === AUTH.user && p === AUTH.pass) {
+    sessionStorage.setItem('pc-auth', '1');
+    document.getElementById('login-screen').classList.remove('show');
+    init();
+  } else {
+    const err = document.getElementById('login-err');
+    err.textContent = 'Wrong username or password.';
+    document.getElementById('login-pass').value = '';
+    setTimeout(() => err.textContent = '', 3000);
+  }
 }
+
+// Allow pressing Enter to submit login
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && document.getElementById('login-screen').classList.contains('show')) {
+    doLogin();
+  }
+});
 
 // ── SUPABASE API ───────────────────────────────────────────────────
 async function dbFetch(path, opts = {}) {
@@ -745,7 +754,6 @@ function renderSettle() {
   }
 
   html += `<div class="info-box">💡 Balances update automatically as you log sessions. Mark payments as paid to track settlements in real time.</div>`;
-  html += `<button class="settings-link" onclick="showConfigScreen()">⚙️ Change Supabase connection</button>`;
   content.innerHTML = html;
 }
 
@@ -927,13 +935,7 @@ function formatDate(str) {
   return new Date(str + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function showConfigScreen() {
-  const url = localStorage.getItem('ps-url') || '';
-  const key = localStorage.getItem('ps-key') || '';
-  document.getElementById('cfg-url').value = url;
-  document.getElementById('cfg-key').value = key;
-  document.getElementById('config-screen').classList.add('show');
-}
+function showConfigScreen() {} // no-op, kept for safety
 
 // ── INIT ───────────────────────────────────────────────────────────
 async function init() {
@@ -952,10 +954,10 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-if (loadConfig()) {
+if (checkLogin()) {
   init();
 } else {
-  showConfigScreen();
+  document.getElementById('login-screen').classList.add('show');
 }
 </script>
 </body>

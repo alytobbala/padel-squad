@@ -594,42 +594,60 @@ function showToast(msg, type = '') {
 function calcAllBalances() {
   const playerAdj = {};
   PLAYERS.forEach(p => playerAdj[p] = 0);
-  const subDebts = {}; // sub name → total owed
+  const subDebts = {}; // sub name → total owed across all sessions
 
   for (const s of sessions) {
     const present = s.present || [];
-    const absent = PLAYERS.filter(p => !present.includes(p));
-    const subs = s.subs || [];
-    const numSubs = subs.length;
-    const numAbsent = absent.length;
-    if (numAbsent === 0 && numSubs === 0) continue;
-    if (numAbsent === 0) continue; // subs with no absents — no money changes hands
+    const absent  = PLAYERS.filter(p => !present.includes(p));
+    const subs    = s.subs || [];
+    const numSubs    = subs.length;
+    const numAbsent  = absent.length;
+    const numPresent = present.length;
+    const totalPlaying = numPresent + numSubs; // everyone on court
 
-    // Each sub fills one absent slot fully (pays PER_PERSON directly to that absent player).
-    // If there are more subs than absent players, extras just split like present players.
-    // If there are fewer subs than absent players, remaining absent slots are split by everyone.
+    if (numAbsent === 0) continue; // no one absent → no redistribution
 
-    const slotsFilledBySubs = Math.min(numSubs, numAbsent);
-    const remainingAbsent = numAbsent - slotsFilledBySubs; // slots not fully covered by a sub
+    // ── How much does each absent player get back? ─────────────────
+    // Always their full slot: PER_PERSON
+    for (const p of absent) playerAdj[p] += PER_PERSON;
 
-    // ── Subs: each fills one full slot ────────────────────────────
-    // Sub's debt = PER_PERSON (full slot) + their share of remaining absent slots
-    const allPresent = present.length + numSubs; // everyone playing
-    const splitCostPerPerson = remainingAbsent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
+    // ── How is the absent cost covered? ───────────────────────────
+    // Total to cover = numAbsent × PER_PERSON
+    // Rule: each sub "fills" one absent slot if numSubs <= numAbsent.
+    //       If numSubs > numAbsent, extra subs are just extra players splitting.
+    // In both cases the cleanest single formula is:
+    //   - Each sub pays: min(1, numAbsent/numSubs) × PER_PERSON
+    //                    + their share of remaining slots
+    //   which simplifies to the cases below.
 
-    for (const sub of subs) {
-      const subTotal = PER_PERSON + splitCostPerPerson; // full slot + share of remaining
-      subDebts[sub.name] = (subDebts[sub.name] || 0) + subTotal;
-    }
+    if (numSubs <= numAbsent) {
+      // ── Case A: fewer (or equal) subs than absent players ─────────
+      // Each sub fills exactly one absent slot = pays PER_PERSON for that slot
+      // Remaining absent slots (numAbsent - numSubs) are split among ALL playing
+      const remainingAbsent = numAbsent - numSubs;
+      const splitCost = remainingAbsent > 0 ? (remainingAbsent * PER_PERSON) / totalPlaying : 0;
 
-    // ── Present original players: only split remaining absent slots ─
-    for (const p of present) {
-      playerAdj[p] -= splitCostPerPerson;
-    }
+      for (const sub of subs) {
+        // Sub pays: full slot + share of remaining absent slots
+        subDebts[sub.name] = (subDebts[sub.name] || 0) + PER_PERSON + splitCost;
+      }
+      for (const p of present) {
+        // Original players only split the remaining absent slots
+        playerAdj[p] -= splitCost;
+      }
 
-    // ── Absent players: each gets their full slot back ─────────────
-    for (const p of absent) {
-      playerAdj[p] += PER_PERSON;
+    } else {
+      // ── Case B: more subs than absent players ─────────────────────
+      // e.g. 1 absent, 2 subs — no slot-filling, just everyone splits equally
+      // Each person (original + sub) pays an equal share of the total absent cost
+      const costPerPerson = (numAbsent * PER_PERSON) / totalPlaying;
+
+      for (const sub of subs) {
+        subDebts[sub.name] = (subDebts[sub.name] || 0) + costPerPerson;
+      }
+      for (const p of present) {
+        playerAdj[p] -= costPerPerson;
+      }
     }
   }
 
@@ -718,28 +736,40 @@ function renderSettle() {
   // We apply payments separately just to know which transactions are done.
 
   function computeTransactions(playerAdj, subDebts) {
-    // Start with a clean copy of player balances
     const bal = {};
     PLAYERS.forEach(p => bal[p] = playerAdj[p]);
 
     const guestTxs = [];
+    const forwardTxs = [];
 
-    // Step 1: assign each guest to a single collector (most indebted player)
-    // We do this BEFORE the player-to-player algorithm so the collector's
-    // balance is correctly updated and their forward payments are included
     for (const [guestName, guestAmt] of Object.entries(subDebts)) {
       if (guestAmt < 0.01) continue;
 
-      // Find the player who owes the most — best to absorb guest cash
-      const sorted = PLAYERS.slice().sort((a, b) => bal[a] - bal[b]);
-      const collector = sorted[0]; // most negative (owes most) or least positive
-
+      // Pick the most-indebted player as the single collector
+      const collector = PLAYERS.slice().sort((a, b) => bal[a] - bal[b])[0];
       guestTxs.push({ from: guestName, to: collector, amount: guestAmt, isGuest: true });
-      // Collector receives guest cash → their debt shrinks (or they become creditor)
-      bal[collector] += guestAmt;
+
+      // Collector's own debt is wiped by the guest payment (partially or fully)
+      // Then they must pay ALL creditors their full owed amounts
+      // (funded by guest cash + their own pocket for any remainder)
+      bal[collector] += guestAmt; // collector now has extra cash
+
+      // Generate forward payments: collector pays every creditor their full balance
+      const creditorsSorted = PLAYERS
+        .filter(p => p !== collector && bal[p] > 0.01)
+        .sort((a, b) => bal[b] - bal[a]);
+
+      for (const creditor of creditorsSorted) {
+        forwardTxs.push({ from: collector, to: creditor, amount: bal[creditor], isGuest: false, isForward: true });
+        bal[collector] -= bal[creditor];
+        bal[creditor] = 0;
+      }
+
+      // Collector balance should now be ~0 (or small rounding)
+      bal[collector] = 0;
     }
 
-    // Step 2: now settle all remaining player balances with minimal transactions
+    // Settle any remaining player balances (sessions without subs)
     const playerTxs = [];
     const debtors   = PLAYERS.filter(p => bal[p] < -0.01).map(p => ({ name: p, amt: -bal[p] })).sort((a,b) => b.amt - a.amt);
     const creditors = PLAYERS.filter(p => bal[p] >  0.01).map(p => ({ name: p, amt:  bal[p] })).sort((a,b) => b.amt - a.amt);
@@ -753,10 +783,9 @@ function renderSettle() {
       if (c[0].amt < 0.01) c.shift();
     }
 
-    return [...guestTxs, ...playerTxs];
+    return [...guestTxs, ...forwardTxs, ...playerTxs];
   }
 
-  // Compute the complete plan — always from scratch, never filtered by payments
   const allTransactions = computeTransactions(playerAdj, subDebts);
 
   // ── Track which transactions are settled via recorded payments ────

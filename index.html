@@ -718,28 +718,28 @@ function renderSettle() {
   // We apply payments separately just to know which transactions are done.
 
   function computeTransactions(playerAdj, subDebts) {
+    // Start with a clean copy of player balances
     const bal = {};
     PLAYERS.forEach(p => bal[p] = playerAdj[p]);
 
     const guestTxs = [];
 
-    // Step 1: route each guest to a single original player (biggest debtor)
+    // Step 1: assign each guest to a single collector (most indebted player)
+    // We do this BEFORE the player-to-player algorithm so the collector's
+    // balance is correctly updated and their forward payments are included
     for (const [guestName, guestAmt] of Object.entries(subDebts)) {
       if (guestAmt < 0.01) continue;
 
-      // Pick the most-indebted original player as collector
-      const sortedDebtors = PLAYERS
-        .filter(p => bal[p] < -0.01)
-        .sort((a, b) => bal[a] - bal[b]); // most negative first
+      // Find the player who owes the most — best to absorb guest cash
+      const sorted = PLAYERS.slice().sort((a, b) => bal[a] - bal[b]);
+      const collector = sorted[0]; // most negative (owes most) or least positive
 
-      const recipient = sortedDebtors[0] ||
-        PLAYERS.slice().sort((a, b) => bal[b] - bal[a])[0]; // fallback: biggest creditor
-
-      guestTxs.push({ from: guestName, to: recipient, amount: guestAmt, isGuest: true });
-      bal[recipient] += guestAmt; // recipient absorbs guest cash
+      guestTxs.push({ from: guestName, to: collector, amount: guestAmt, isGuest: true });
+      // Collector receives guest cash → their debt shrinks (or they become creditor)
+      bal[collector] += guestAmt;
     }
 
-    // Step 2: settle among original players with updated balances
+    // Step 2: now settle all remaining player balances with minimal transactions
     const playerTxs = [];
     const debtors   = PLAYERS.filter(p => bal[p] < -0.01).map(p => ({ name: p, amt: -bal[p] })).sort((a,b) => b.amt - a.amt);
     const creditors = PLAYERS.filter(p => bal[p] >  0.01).map(p => ({ name: p, amt:  bal[p] })).sort((a,b) => b.amt - a.amt);
@@ -756,7 +756,7 @@ function renderSettle() {
     return [...guestTxs, ...playerTxs];
   }
 
-  // Full plan — shown always
+  // Compute the complete plan — always from scratch, never filtered by payments
   const allTransactions = computeTransactions(playerAdj, subDebts);
 
   // ── Track which transactions are settled via recorded payments ────

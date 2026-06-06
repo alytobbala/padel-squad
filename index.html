@@ -590,20 +590,44 @@ function showToast(msg, type = '') {
 }
 
 // ── CALCULATIONS ───────────────────────────────────────────────────
-function calcBalances() {
-  const adj = {};
-  PLAYERS.forEach(p => adj[p] = 0);
+
+function calcAllBalances() {
+  const playerAdj = {};
+  PLAYERS.forEach(p => playerAdj[p] = 0);
+  const subDebts = {}; // sub name → total owed
+
   for (const s of sessions) {
     const present = s.present || [];
     const absent = PLAYERS.filter(p => !present.includes(p));
-    const numSubs = (s.subs || []).length;
-    const totalPresent = present.length + numSubs;
+    const subs = s.subs || [];
+    const totalPresent = present.length + subs.length; // everyone who played
     if (absent.length === 0) continue;
-    const extraPerPresent = totalPresent > 0 ? (absent.length * PER_PERSON) / totalPresent : 0;
-    for (const p of present) adj[p] -= extraPerPresent;
-    for (const p of absent) adj[p] += PER_PERSON;
+
+    // Each absent player is fully refunded their slot
+    const refundPerAbsent = PER_PERSON;
+    for (const p of absent) playerAdj[p] += refundPerAbsent;
+
+    // The total pot to cover = absent slots
+    // Split equally across ALL who played (original + subs)
+    const costPerPresent = (absent.length * PER_PERSON) / totalPresent;
+
+    // Original present players pay their share
+    for (const p of present) playerAdj[p] -= costPerPresent;
+
+    // Subs owe the same share — tracked separately for Settle Up
+    for (const sub of subs) {
+      subDebts[sub.name] = (subDebts[sub.name] || 0) + costPerPresent;
+    }
   }
-  return adj;
+
+  // Verify: sum of playerAdj + subDebts should be 0 (zero-sum)
+  // absent credits = present debits + sub debts ✓
+  return { playerAdj, subDebts };
+}
+
+// Legacy helper used by dashboard
+function calcBalances() {
+  return calcAllBalances().playerAdj;
 }
 
 // ── RENDER ─────────────────────────────────────────────────────────
@@ -649,7 +673,12 @@ function renderSessions() {
     const absent = PLAYERS.filter(p => !present.includes(p));
     const chips = present.map(p => `<span class="player-chip present">${p}</span>`).join('');
     const absentChips = absent.map(p => `<span class="player-chip absent">${p}</span>`).join('');
-    const subChips = (s.subs || []).map(sub => `<span class="player-chip sub">${sub.name}</span>`).join('');
+    const numSubs = (s.subs || []).length;
+    const totalPresent = present.length + numSubs;
+    const subCost = absent.length > 0 && totalPresent > 0 ? (absent.length * PER_PERSON) / totalPresent : 0;
+    const subChips = (s.subs || []).map(sub =>
+      `<span class="player-chip sub">${sub.name}${absent.length > 0 ? ` · €${subCost.toFixed(2)}` : ''}</span>`
+    ).join('');
     list.innerHTML += `
       <div class="session-card" onclick="openEditSession('${s.id}')">
         <div class="session-header">
@@ -662,7 +691,7 @@ function renderSessions() {
 }
 
 function renderSettle() {
-  const adj = calcBalances();
+  const { playerAdj, subDebts } = calcAllBalances();
   const content = document.getElementById('settle-content');
 
   if (sessions.length === 0) {
@@ -670,22 +699,32 @@ function renderSettle() {
     return;
   }
 
-  // Compute minimal transactions using a debt-settling algorithm
-  // Net balances: positive = owed money back, negative = owes extra
+  // Build unified balance pool
+  // Players start with their calculated adjustments
   const balances = {};
-  PLAYERS.forEach(p => balances[p] = adj[p]);
+  PLAYERS.forEach(p => balances[p] = playerAdj[p]);
+
+  // Subs are debtors — they owe their share
+  // This is NOT double-counting: calcAllBalances already reduced present players'
+  // burden by the sub's contribution, but it never credited the absent players
+  // for the sub's share. We add sub debts here, and the absent players'
+  // +PER_PERSON credit already accounts for receiving from ALL present including subs.
+  for (const [name, amt] of Object.entries(subDebts)) {
+    balances[name] = (balances[name] || 0) - amt;
+  }
 
   // Account for already-recorded payments
   for (const pay of payments) {
-    if (balances[pay.from_player] !== undefined) balances[pay.from_player] += pay.amount;
-    if (balances[pay.to_player] !== undefined) balances[pay.to_player] -= pay.amount;
+    if (balances[pay.from_player] !== undefined) balances[pay.from_player] += Number(pay.amount);
+    if (balances[pay.to_player] !== undefined) balances[pay.to_player] -= Number(pay.amount);
   }
 
-  // Generate minimal transactions
-  const transactions = [];
-  const debtors = PLAYERS.filter(p => balances[p] < -0.01).map(p => ({ name: p, amt: -balances[p] })).sort((a,b) => b.amt - a.amt);
-  const creditors = PLAYERS.filter(p => balances[p] > 0.01).map(p => ({ name: p, amt: balances[p] })).sort((a,b) => b.amt - a.amt);
+  // Minimal transaction algorithm across ALL participants (players + subs)
+  const allNames = Object.keys(balances);
+  const debtors   = allNames.filter(n => balances[n] < -0.01).map(n => ({ name: n, amt: -balances[n] })).sort((a,b) => b.amt - a.amt);
+  const creditors = allNames.filter(n => balances[n] >  0.01).map(n => ({ name: n, amt:  balances[n] })).sort((a,b) => b.amt - a.amt);
 
+  const transactions = [];
   const d = debtors.map(x => ({ ...x }));
   const c = creditors.map(x => ({ ...x }));
 
@@ -697,12 +736,7 @@ function renderSettle() {
     if (c[0].amt < 0.01) c.shift();
   }
 
-  // Settled transactions (from payments table, grouped by from+to)
-  const paidMap = {};
-  for (const pay of payments) {
-    const key = `${pay.from_player}→${pay.to_player}`;
-    paidMap[key] = (paidMap[key] || 0) + pay.amount;
-  }
+  const isGuest = name => !PLAYERS.includes(name);
 
   let html = '';
 
@@ -715,16 +749,18 @@ function renderSettle() {
   } else {
     html += `<div class="section-title" style="margin-bottom:10px;">Pending Payments</div>`;
     for (const tx of transactions) {
+      const fromGuest = isGuest(tx.from);
       html += `
-        <div class="tx-card">
+        <div class="tx-card" style="${fromGuest ? 'border-color:#1a3a5a' : ''}">
           <div class="tx-row">
             <div class="tx-players">
-              <span class="tx-from">${tx.from}</span>
+              <span class="tx-from" style="${fromGuest ? 'color:var(--accent2)' : ''}">${tx.from}${fromGuest ? ' 👤' : ''}</span>
               <span class="tx-arrow">→</span>
               <span class="tx-to">${tx.to}</span>
             </div>
             <div class="tx-amount">€${tx.amount.toFixed(2)}</div>
           </div>
+          ${fromGuest ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Guest — collect cash, then ${tx.to} pays their share forward</div>` : ''}
           <button class="pay-btn" onclick="markPaid('${tx.from}','${tx.to}',${tx.amount.toFixed(2)})">
             ✓ Mark as Paid
           </button>
@@ -753,7 +789,7 @@ function renderSettle() {
     html += `</div>`;
   }
 
-  html += `<div class="info-box">💡 Balances update automatically as you log sessions. Mark payments as paid to track settlements in real time.</div>`;
+  html += `<div class="info-box">💡 Guest players (👤) appear as debtors. Islam can collect Youssef's cash and pay his combined share to the absent players — the algorithm figures out the fewest transfers automatically.</div>`;
   content.innerHTML = html;
 }
 
@@ -820,7 +856,7 @@ function openEditSession(id) {
 
 function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
 
-function togglePlayer(name) { playerPresence[name] = !playerPresence[name]; renderPlayerToggles(); updateCalcPreview(); }
+function togglePlayer(name) { playerPresence[name] = !playerPresence[name]; renderPlayerToggles(); renderSubRows(); updateCalcPreview(); }
 
 function renderPlayerToggles() {
   const container = document.getElementById('player-toggles');
@@ -839,13 +875,25 @@ function addSubRow() { subRows.push({ name: '' }); renderSubRows(); updateCalcPr
 function removeSubRow(i) { subRows.splice(i, 1); renderSubRows(); updateCalcPreview(); }
 
 function renderSubRows() {
+  const absent = PLAYERS.filter(p => !playerPresence[p]);
+  const totalPresent = PLAYERS.filter(p => playerPresence[p]).length + subRows.length;
+  const subOwes = absent.length > 0 && totalPresent > 0
+    ? (absent.length * PER_PERSON) / totalPresent
+    : 0;
+
   const container = document.getElementById('subs-list');
   container.innerHTML = '';
   subRows.forEach((sub, i) => {
+    const owesBadge = subOwes > 0
+      ? `<span style="font-size:11px;color:var(--accent2);background:#0a1a2a;border:1px solid #1a3a5a;border-radius:20px;padding:3px 10px;flex-shrink:0;">owes €${subOwes.toFixed(2)}</span>`
+      : '';
     container.innerHTML += `
-      <div class="sub-row">
-        <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview()">
-        <button class="remove-sub" onclick="removeSubRow(${i})">✕</button>
+      <div style="margin-bottom:10px;">
+        <div class="sub-row">
+          <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview();renderSubRows()">
+          <button class="remove-sub" onclick="removeSubRow(${i})">✕</button>
+        </div>
+        ${owesBadge ? `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:2px;">${owesBadge}<span style="font-size:11px;color:var(--muted);">for this session</span></div>` : ''}
       </div>`;
   });
 }
@@ -865,7 +913,11 @@ function updateCalcPreview() {
   html += `<div class="calc-row danger"><span>Absent: ${absent.join(', ')}</span></div>`;
   html += `<div class="calc-row highlight"><span>Each absent gets back</span><span>+€${PER_PERSON.toFixed(2)}</span></div>`;
   html += `<div class="calc-row danger"><span>Each present pays extra</span><span>-€${extraPerPresent.toFixed(2)}</span></div>`;
-  if (subs.length > 0) html += `<div class="calc-row" style="color:var(--accent2)"><span>Subs: ${subs.map(s => s.name).join(', ')}</span></div>`;
+  if (subs.length > 0) {
+    html += `<hr style="border-color:var(--border);margin:6px 0">`;
+    html += `<div class="calc-row" style="color:var(--accent2);font-weight:600;"><span>⚡ Each sub owes</span><span>€${extraPerPresent.toFixed(2)}</span></div>`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-top:2px;">Tell ${subs.map(s=>s.name||'sub').join(' & ')} to pay €${extraPerPresent.toFixed(2)} each</div>`;
+  }
   content.innerHTML = html;
 }
 

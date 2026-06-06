@@ -430,10 +430,10 @@
 <script>
 // ── CONSTANTS ──────────────────────────────────────────────────────
 const PLAYERS = ['Aly', 'Islam', 'Gomaa', 'Hadi', 'Tarek'];
-const TOTAL_PAID = 205.20;   // per player upfront
+const TOTAL_PAID = 205.20;
 const SESSIONS_TOTAL = 18;
-const SESSION_COST = 57.00;  // 205.20 * 5 / 18 = 57.00
-const PER_PERSON = SESSION_COST / 5; // 11.40
+const SESSION_COST = 57.00;
+const PER_PERSON = SESSION_COST / 5; // €11.40
 
 // ── CREDENTIALS (hardcoded) ────────────────────────────────────────
 const SUPA_URL = 'https://znajxklnxurfalkmsams.supabase.co';
@@ -600,28 +600,39 @@ function calcAllBalances() {
     const present = s.present || [];
     const absent = PLAYERS.filter(p => !present.includes(p));
     const subs = s.subs || [];
-    const totalPresent = present.length + subs.length; // everyone who played
-    if (absent.length === 0) continue;
+    const numSubs = subs.length;
+    const numAbsent = absent.length;
+    if (numAbsent === 0 && numSubs === 0) continue;
+    if (numAbsent === 0) continue; // subs with no absents — no money changes hands
 
-    // Each absent player is fully refunded their slot
-    const refundPerAbsent = PER_PERSON;
-    for (const p of absent) playerAdj[p] += refundPerAbsent;
+    // Each sub fills one absent slot fully (pays PER_PERSON directly to that absent player).
+    // If there are more subs than absent players, extras just split like present players.
+    // If there are fewer subs than absent players, remaining absent slots are split by everyone.
 
-    // The total pot to cover = absent slots
-    // Split equally across ALL who played (original + subs)
-    const costPerPresent = (absent.length * PER_PERSON) / totalPresent;
+    const slotsFilledBySubs = Math.min(numSubs, numAbsent);
+    const remainingAbsent = numAbsent - slotsFilledBySubs; // slots not fully covered by a sub
 
-    // Original present players pay their share
-    for (const p of present) playerAdj[p] -= costPerPresent;
+    // ── Subs: each fills one full slot ────────────────────────────
+    // Sub's debt = PER_PERSON (full slot) + their share of remaining absent slots
+    const allPresent = present.length + numSubs; // everyone playing
+    const splitCostPerPerson = remainingAbsent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
 
-    // Subs owe the same share — tracked separately for Settle Up
     for (const sub of subs) {
-      subDebts[sub.name] = (subDebts[sub.name] || 0) + costPerPresent;
+      const subTotal = PER_PERSON + splitCostPerPerson; // full slot + share of remaining
+      subDebts[sub.name] = (subDebts[sub.name] || 0) + subTotal;
+    }
+
+    // ── Present original players: only split remaining absent slots ─
+    for (const p of present) {
+      playerAdj[p] -= splitCostPerPerson;
+    }
+
+    // ── Absent players: each gets their full slot back ─────────────
+    for (const p of absent) {
+      playerAdj[p] += PER_PERSON;
     }
   }
 
-  // Verify: sum of playerAdj + subDebts should be 0 (zero-sum)
-  // absent credits = present debits + sub debts ✓
   return { playerAdj, subDebts };
 }
 
@@ -674,10 +685,13 @@ function renderSessions() {
     const chips = present.map(p => `<span class="player-chip present">${p}</span>`).join('');
     const absentChips = absent.map(p => `<span class="player-chip absent">${p}</span>`).join('');
     const numSubs = (s.subs || []).length;
-    const totalPresent = present.length + numSubs;
-    const subCost = absent.length > 0 && totalPresent > 0 ? (absent.length * PER_PERSON) / totalPresent : 0;
+    const slotsFilledBySubs = Math.min(numSubs, absent.length);
+    const remainingAbsent = absent.length - slotsFilledBySubs;
+    const allPresent = present.length + numSubs;
+    const splitCost = remainingAbsent > 0 && allPresent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
+    const guestOwes = absent.length > 0 ? PER_PERSON + splitCost : 0;
     const subChips = (s.subs || []).map(sub =>
-      `<span class="player-chip sub">${sub.name}${absent.length > 0 ? ` · €${subCost.toFixed(2)}` : ''}</span>`
+      `<span class="player-chip sub">${sub.name}${guestOwes > 0 ? ` · €${guestOwes.toFixed(2)}` : ''}</span>`
     ).join('');
     list.innerHTML += `
       <div class="session-card" onclick="openEditSession('${s.id}')">
@@ -719,24 +733,55 @@ function renderSettle() {
     if (balances[pay.to_player] !== undefined) balances[pay.to_player] -= Number(pay.amount);
   }
 
-  // Minimal transaction algorithm across ALL participants (players + subs)
-  const allNames = Object.keys(balances);
-  const debtors   = allNames.filter(n => balances[n] < -0.01).map(n => ({ name: n, amt: -balances[n] })).sort((a,b) => b.amt - a.amt);
-  const creditors = allNames.filter(n => balances[n] >  0.01).map(n => ({ name: n, amt:  balances[n] })).sort((a,b) => b.amt - a.amt);
+  // ── Step 1: resolve guest payments first (single recipient each) ──
+  // Best recipient = original player with the largest debt (most negative balance)
+  // Guest pays them, reducing that player's debt. That player then distributes onward.
+  const guestTransactions = [];
+  for (const [guestName, guestAmt] of Object.entries(subDebts)) {
+    let amt = guestAmt;
+    // Subtract any payments this guest already made
+    for (const pay of payments) {
+      if (pay.from_player === guestName) amt -= Number(pay.amount);
+    }
+    if (amt < 0.01) continue;
 
-  const transactions = [];
+    // Pick the original player who owes the most (most negative balance) as recipient
+    // They collect on behalf of the group
+    const bestRecipient = PLAYERS
+      .filter(p => balances[p] < -0.01)
+      .sort((a, b) => balances[a] - balances[b])[0]; // most negative first
+
+    if (bestRecipient) {
+      guestTransactions.push({ from: guestName, to: bestRecipient, amount: amt, isGuest: true });
+      // Adjust that player's balance — they collected the cash, so their debt reduces
+      balances[bestRecipient] += amt;
+    } else {
+      // No one is in debt — pick whoever is owed the most
+      const topCreditor = PLAYERS
+        .sort((a, b) => balances[b] - balances[a])[0];
+      if (topCreditor) {
+        guestTransactions.push({ from: guestName, to: topCreditor, amount: amt, isGuest: true });
+        balances[topCreditor] -= amt;
+      }
+    }
+  }
+
+  // ── Step 2: settle remaining balances among original players only ─
+  const debtors   = PLAYERS.filter(p => balances[p] < -0.01).map(p => ({ name: p, amt: -balances[p] })).sort((a,b) => b.amt - a.amt);
+  const creditors = PLAYERS.filter(p => balances[p] >  0.01).map(p => ({ name: p, amt:  balances[p] })).sort((a,b) => b.amt - a.amt);
+
+  const playerTransactions = [];
   const d = debtors.map(x => ({ ...x }));
   const c = creditors.map(x => ({ ...x }));
-
   while (d.length && c.length) {
     const pay = Math.min(d[0].amt, c[0].amt);
-    transactions.push({ from: d[0].name, to: c[0].name, amount: pay });
+    playerTransactions.push({ from: d[0].name, to: c[0].name, amount: pay, isGuest: false });
     d[0].amt -= pay; c[0].amt -= pay;
     if (d[0].amt < 0.01) d.shift();
     if (c[0].amt < 0.01) c.shift();
   }
 
-  const isGuest = name => !PLAYERS.includes(name);
+  const transactions = [...guestTransactions, ...playerTransactions];
 
   let html = '';
 
@@ -749,18 +794,17 @@ function renderSettle() {
   } else {
     html += `<div class="section-title" style="margin-bottom:10px;">Pending Payments</div>`;
     for (const tx of transactions) {
-      const fromGuest = isGuest(tx.from);
       html += `
-        <div class="tx-card" style="${fromGuest ? 'border-color:#1a3a5a' : ''}">
+        <div class="tx-card" style="${tx.isGuest ? 'border-color:#1a3a5a' : ''}">
           <div class="tx-row">
             <div class="tx-players">
-              <span class="tx-from" style="${fromGuest ? 'color:var(--accent2)' : ''}">${tx.from}${fromGuest ? ' 👤' : ''}</span>
+              <span class="tx-from" style="${tx.isGuest ? 'color:var(--accent2)' : ''}">${tx.from}${tx.isGuest ? ' 👤' : ''}</span>
               <span class="tx-arrow">→</span>
               <span class="tx-to">${tx.to}</span>
             </div>
             <div class="tx-amount">€${tx.amount.toFixed(2)}</div>
           </div>
-          ${fromGuest ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Guest — collect cash, then ${tx.to} pays their share forward</div>` : ''}
+          ${tx.isGuest ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Guest pays once — ${tx.to} distributes onward</div>` : ''}
           <button class="pay-btn" onclick="markPaid('${tx.from}','${tx.to}',${tx.amount.toFixed(2)})">
             ✓ Mark as Paid
           </button>
@@ -876,24 +920,28 @@ function removeSubRow(i) { subRows.splice(i, 1); renderSubRows(); updateCalcPrev
 
 function renderSubRows() {
   const absent = PLAYERS.filter(p => !playerPresence[p]);
-  const totalPresent = PLAYERS.filter(p => playerPresence[p]).length + subRows.length;
-  const subOwes = absent.length > 0 && totalPresent > 0
-    ? (absent.length * PER_PERSON) / totalPresent
-    : 0;
+  const numAbsent = absent.length;
+  const numSubs = subRows.length;
+  const allPresent = PLAYERS.filter(p => playerPresence[p]).length + numSubs;
+  const slotsFilledBySubs = Math.min(numSubs, numAbsent);
+  const remainingAbsent = numAbsent - slotsFilledBySubs;
+  const splitCost = remainingAbsent > 0 && allPresent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
+  const guestOwes = numAbsent > 0 ? PER_PERSON + splitCost : 0;
 
   const container = document.getElementById('subs-list');
   container.innerHTML = '';
   subRows.forEach((sub, i) => {
-    const owesBadge = subOwes > 0
-      ? `<span style="font-size:11px;color:var(--accent2);background:#0a1a2a;border:1px solid #1a3a5a;border-radius:20px;padding:3px 10px;flex-shrink:0;">owes €${subOwes.toFixed(2)}</span>`
-      : '';
+    const badge = guestOwes > 0
+      ? `<span style="font-size:11px;color:var(--accent2);background:#0a1a2a;border:1px solid #1a3a5a;border-radius:20px;padding:3px 10px;flex-shrink:0;">owes €${guestOwes.toFixed(2)}</span>
+         <span style="font-size:11px;color:var(--muted);">€${PER_PERSON.toFixed(2)} slot + €${splitCost.toFixed(2)} split</span>`
+      : `<span style="font-size:11px;color:var(--muted);">no absent players — owes €0</span>`;
     container.innerHTML += `
       <div style="margin-bottom:10px;">
         <div class="sub-row">
           <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview();renderSubRows()">
           <button class="remove-sub" onclick="removeSubRow(${i})">✕</button>
         </div>
-        ${owesBadge ? `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:2px;">${owesBadge}<span style="font-size:11px;color:var(--muted);">for this session</span></div>` : ''}
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">${badge}</div>
       </div>`;
   });
 }
@@ -914,9 +962,13 @@ function updateCalcPreview() {
   html += `<div class="calc-row highlight"><span>Each absent gets back</span><span>+€${PER_PERSON.toFixed(2)}</span></div>`;
   html += `<div class="calc-row danger"><span>Each present pays extra</span><span>-€${extraPerPresent.toFixed(2)}</span></div>`;
   if (subs.length > 0) {
+    const slotsFilledBySubs = Math.min(subs.length, absent.length);
+    const remainingAbsent = absent.length - slotsFilledBySubs;
+    const splitCost = remainingAbsent > 0 && totalPresent > 0 ? (remainingAbsent * PER_PERSON) / totalPresent : 0;
+    const guestTotal = absent.length > 0 ? PER_PERSON + splitCost : 0;
     html += `<hr style="border-color:var(--border);margin:6px 0">`;
-    html += `<div class="calc-row" style="color:var(--accent2);font-weight:600;"><span>⚡ Each sub owes</span><span>€${extraPerPresent.toFixed(2)}</span></div>`;
-    html += `<div style="font-size:11px;color:var(--muted);margin-top:2px;">Tell ${subs.map(s=>s.name||'sub').join(' & ')} to pay €${extraPerPresent.toFixed(2)} each</div>`;
+    html += `<div class="calc-row" style="color:var(--accent2);font-weight:600;"><span>⚡ Each guest pays</span><span>€${guestTotal.toFixed(2)}</span></div>`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-top:2px;">€${PER_PERSON.toFixed(2)} fills one absent slot + €${splitCost.toFixed(2)} share of remaining</div>`;
   }
   content.innerHTML = html;
 }

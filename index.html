@@ -783,6 +783,12 @@ function renderSettle() {
 
   const transactions = [...guestTransactions, ...playerTransactions];
 
+  // Build a map of how much each player collected from guests
+  const collectedFromGuests = {};
+  for (const tx of guestTransactions) {
+    collectedFromGuests[tx.to] = (collectedFromGuests[tx.to] || 0) + tx.amount;
+  }
+
   let html = '';
 
   if (transactions.length === 0) {
@@ -793,7 +799,27 @@ function renderSettle() {
     </div>`;
   } else {
     html += `<div class="section-title" style="margin-bottom:10px;">Pending Payments</div>`;
+
+    // Group player transactions by sender so we can show collected note once per sender
+    const shownCollectedNote = new Set();
+
     for (const tx of transactions) {
+      let extraNote = '';
+
+      if (tx.isGuest) {
+        extraNote = `<div style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6;">
+          👤 Guest — pays once. <strong style="color:var(--text)">${tx.to}</strong> collects and distributes onward.
+        </div>`;
+      } else if (collectedFromGuests[tx.from] && !shownCollectedNote.has(tx.from)) {
+        // First outgoing tx for a player who collected guest money — show the note
+        const collected = collectedFromGuests[tx.from];
+        const guestNames = guestTransactions.filter(g => g.to === tx.from).map(g => g.from).join(', ');
+        extraNote = `<div style="font-size:12px;background:#0a1a2a;border:1px solid #1a3a5a;border-radius:8px;padding:10px;margin-top:10px;line-height:1.7;color:var(--muted);">
+          💰 <strong style="color:var(--accent2)">${tx.from}</strong> collected <strong style="color:var(--accent2)">€${collected.toFixed(2)}</strong> from ${guestNames} — use it toward these payments
+        </div>`;
+        shownCollectedNote.add(tx.from);
+      }
+
       html += `
         <div class="tx-card" style="${tx.isGuest ? 'border-color:#1a3a5a' : ''}">
           <div class="tx-row">
@@ -804,7 +830,7 @@ function renderSettle() {
             </div>
             <div class="tx-amount">€${tx.amount.toFixed(2)}</div>
           </div>
-          ${tx.isGuest ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Guest pays once — ${tx.to} distributes onward</div>` : ''}
+          ${extraNote}
           <button class="pay-btn" onclick="markPaid('${tx.from}','${tx.to}',${tx.amount.toFixed(2)})">
             ✓ Mark as Paid
           </button>

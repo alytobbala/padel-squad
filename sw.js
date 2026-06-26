@@ -1,4 +1,4 @@
-const CACHE = 'padel-squad-v2';
+const CACHE = 'padel-squad-v3';
 const ASSETS = ['./index.html', './manifest.json'];
 
 self.addEventListener('install', e => {

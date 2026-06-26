@@ -199,12 +199,13 @@
   }
   .form-label { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; display: block; }
   .form-group { margin-bottom: 18px; }
-  input[type="date"], input[type="text"] {
+  input[type="date"], input[type="text"], select.sub-select {
     width: 100%; background: var(--surface2); border: 1px solid var(--border);
     border-radius: 8px; padding: 12px; color: var(--text);
     font-family: 'DM Mono', monospace; font-size: 14px; outline: none; transition: border-color 0.2s;
   }
-  input:focus { border-color: var(--accent); }
+  input:focus, select.sub-select:focus { border-color: var(--accent); }
+  select.sub-select option { background: var(--surface2); color: var(--text); }
   .player-toggles { display: flex; flex-direction: column; gap: 8px; }
   .player-toggle {
     display: flex; align-items: center; justify-content: space-between;
@@ -219,6 +220,8 @@
   .toggle-status.absent { background: #5a2a2a; color: var(--danger); }
   .sub-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
   .sub-row input { flex: 1; }
+  .sub-paidto-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .sub-paidto-row .paid-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .remove-sub { background: #2a1a1a; border: 1px solid #5a2a2a; color: var(--danger); border-radius: 6px; padding: 10px; cursor: pointer; font-size: 14px; }
   .add-sub-btn {
     background: none; border: 1px dashed var(--border); color: var(--muted);
@@ -366,7 +369,7 @@
   <div class="section-title">Player Balances</div>
   <div class="balance-grid" id="balance-grid"></div>
   <div class="info-box">
-    💡 <strong>How it works:</strong> Each player paid €205.20 upfront (18 × €11.40). When someone misses a session, all present players (including subs) split the absent player's share equally.
+    💡 <strong>How it works:</strong> Each player paid €205.20 upfront (18 × €11.40). The court (€57) is always split evenly between whoever is on it. Absent players get their €11.40 back; a sub pays a full share to one present player, who then forwards it on. Balances shown here are each player's true season position.
   </div>
 </div>
 
@@ -433,7 +436,11 @@ const PLAYERS = ['Aly', 'Islam', 'Gomaa', 'Hadi', 'Tarek'];
 const TOTAL_PAID = 205.20;
 const SESSIONS_TOTAL = 18;
 const SESSION_COST = 57.00;
-const PER_PERSON = SESSION_COST / 5; // €11.40
+const PER_PERSON = SESSION_COST / 5; // €11.40 — each player's prepaid share
+
+// round to cents to kill floating-point dust
+const r2 = (n) => Math.round(n * 100) / 100;
+const eur = (n) => '€' + Math.abs(n).toFixed(2);
 
 // ── CREDENTIALS (hardcoded) ────────────────────────────────────────
 const SUPA_URL = 'https://znajxklnxurfalkmsams.supabase.co';
@@ -460,7 +467,6 @@ function doLogin() {
   }
 }
 
-// Allow pressing Enter to submit login
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' && document.getElementById('login-screen').classList.contains('show')) {
     doLogin();
@@ -511,42 +517,19 @@ async function loadPayments() {
 }
 
 async function insertSession(session) {
-  return dbFetch('sessions', {
-    method: 'POST',
-    body: JSON.stringify(session),
-    prefer: 'return=representation'
-  });
+  return dbFetch('sessions', { method: 'POST', body: JSON.stringify(session), prefer: 'return=representation' });
 }
-
 async function updateSession(id, session) {
-  return dbFetch(`sessions?id=eq.${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(session),
-    prefer: 'return=representation'
-  });
+  return dbFetch(`sessions?id=eq.${id}`, { method: 'PATCH', body: JSON.stringify(session), prefer: 'return=representation' });
 }
-
 async function deleteSession(id) {
-  return dbFetch(`sessions?id=eq.${id}`, {
-    method: 'DELETE',
-    prefer: 'return=minimal',
-    headers: { 'Prefer': 'return=minimal' }
-  });
+  return dbFetch(`sessions?id=eq.${id}`, { method: 'DELETE', prefer: 'return=minimal', headers: { 'Prefer': 'return=minimal' } });
 }
-
 async function insertPayment(from_player, to_player, amount, note) {
-  return dbFetch('payments', {
-    method: 'POST',
-    body: JSON.stringify({ from_player, to_player, amount, note }),
-    prefer: 'return=representation'
-  });
+  return dbFetch('payments', { method: 'POST', body: JSON.stringify({ from_player, to_player, amount, note }), prefer: 'return=representation' });
 }
-
 async function removePayment(id) {
-  return dbFetch(`payments?id=eq.${id}`, {
-    method: 'DELETE',
-    headers: { 'Prefer': 'return=minimal' }
-  });
+  return dbFetch(`payments?id=eq.${id}`, { method: 'DELETE', headers: { 'Prefer': 'return=minimal' } });
 }
 
 // ── STATE ──────────────────────────────────────────────────────────
@@ -554,7 +537,8 @@ let sessions = [];
 let payments = [];
 let editingId = null;
 let playerPresence = {};
-let subRows = [];
+let subRows = [];          // [{ name, paidTo }]
+let SETTLE_TXS = [];       // all settlement transactions for the current render
 
 // ── SYNC INDICATOR ─────────────────────────────────────────────────
 function setSyncing() { const d = document.getElementById('sync-dot'); d.className = 'sync-indicator syncing'; d.title = 'Syncing...'; }
@@ -562,16 +546,12 @@ function setSynced()  { const d = document.getElementById('sync-dot'); d.classNa
 function setSyncError(){ const d = document.getElementById('sync-dot'); d.className = 'sync-indicator error';   d.title = 'Sync error'; }
 
 // ── LOADING BAR ────────────────────────────────────────────────────
-let loadProgress = 0;
-let loadTimer = null;
+let loadProgress = 0, loadTimer = null;
 function startLoading() {
   loadProgress = 10;
   const bar = document.getElementById('loading-bar');
   bar.style.width = '10%'; bar.classList.add('active');
-  loadTimer = setInterval(() => {
-    loadProgress = Math.min(loadProgress + 10, 80);
-    bar.style.width = loadProgress + '%';
-  }, 200);
+  loadTimer = setInterval(() => { loadProgress = Math.min(loadProgress + 10, 80); bar.style.width = loadProgress + '%'; }, 200);
 }
 function stopLoading() {
   clearInterval(loadTimer);
@@ -589,77 +569,98 @@ function showToast(msg, type = '') {
   toastTimer = setTimeout(() => t.className = 'toast', 2500);
 }
 
-// ── CALCULATIONS ───────────────────────────────────────────────────
+// ── HELPERS ────────────────────────────────────────────────────────
+function presentOf(s)  { return (s.present || []).filter(p => PLAYERS.includes(p)); }
+function absentOf(s)   { const pr = presentOf(s); return PLAYERS.filter(p => !pr.includes(p)); }
+// the share each person on court pays this session (court / number on court)
+function shareOf(s) {
+  const n = presentOf(s).length + (s.subs || []).length;
+  return n > 0 ? SESSION_COST / n : 0;
+}
 
+// ── CORE CALCULATION ───────────────────────────────────────────────
+// One rule for every case: court ÷ people on court.
+//  - present original : pays (share − prepaid)  → owes the difference
+//  - absent original  : refunded their prepaid share (+€11.40)
+//  - sub              : pays a full share, in cash, to one present "custodian"
+// playerAdj = each original's TRUE season balance (what the dashboard shows).
+// guestPayments = the cash each sub hands to a present player on the day.
 function calcAllBalances() {
   const playerAdj = {};
   PLAYERS.forEach(p => playerAdj[p] = 0);
-  const subDebts = {}; // sub name → total owed across all sessions
+  const guestPayments = []; // { name, to, amount, sessionId }
 
   for (const s of sessions) {
-    const present = s.present || [];
-    const absent  = PLAYERS.filter(p => !present.includes(p));
+    const present = presentOf(s);
+    const absent  = absentOf(s);
     const subs    = s.subs || [];
-    const numSubs    = subs.length;
-    const numAbsent  = absent.length;
-    const numPresent = present.length;
-    const totalPlaying = numPresent + numSubs; // everyone on court
+    const onCourt = present.length + subs.length;
+    if (onCourt === 0) continue;
+    if (absent.length === 0 && subs.length === 0) continue; // all five played, nothing to move
 
-    if (numAbsent === 0) continue; // no one absent → no redistribution
+    const share = SESSION_COST / onCourt;
 
-    // ── How much does each absent player get back? ─────────────────
-    // Always their full slot: PER_PERSON
-    for (const p of absent) playerAdj[p] += PER_PERSON;
+    present.forEach(p => playerAdj[p] += (PER_PERSON - share)); // negative when share > 11.40
+    absent.forEach(p  => playerAdj[p] += PER_PERSON);           // full refund
 
-    // ── How is the absent cost covered? ───────────────────────────
-    // Total to cover = numAbsent × PER_PERSON
-    // Rule: each sub "fills" one absent slot if numSubs <= numAbsent.
-    //       If numSubs > numAbsent, extra subs are just extra players splitting.
-    // In both cases the cleanest single formula is:
-    //   - Each sub pays: min(1, numAbsent/numSubs) × PER_PERSON
-    //                    + their share of remaining slots
-    //   which simplifies to the cases below.
-
-    if (numSubs <= numAbsent) {
-      // ── Case A: fewer (or equal) subs than absent players ─────────
-      // Each sub fills exactly one absent slot = pays PER_PERSON for that slot
-      // Remaining absent slots (numAbsent - numSubs) are split among ALL playing
-      const remainingAbsent = numAbsent - numSubs;
-      const splitCost = remainingAbsent > 0 ? (remainingAbsent * PER_PERSON) / totalPlaying : 0;
-
-      for (const sub of subs) {
-        // Sub pays: full slot + share of remaining absent slots
-        subDebts[sub.name] = (subDebts[sub.name] || 0) + PER_PERSON + splitCost;
-      }
-      for (const p of present) {
-        // Original players only split the remaining absent slots
-        playerAdj[p] -= splitCost;
-      }
-
-    } else {
-      // ── Case B: more subs than absent players ─────────────────────
-      // e.g. 1 absent, 2 subs — no slot-filling, just everyone splits equally
-      // Each person (original + sub) pays an equal share of the total absent cost
-      const costPerPerson = (numAbsent * PER_PERSON) / totalPlaying;
-
-      for (const sub of subs) {
-        subDebts[sub.name] = (subDebts[sub.name] || 0) + costPerPerson;
-      }
-      for (const p of present) {
-        playerAdj[p] -= costPerPerson;
-      }
-    }
+    subs.forEach((sub, si) => {
+      let custodian = sub.paidTo;
+      if (!custodian || !present.includes(custodian)) custodian = present[0] || null;
+      if (custodian) guestPayments.push({
+        name: (sub.name || 'Guest'),
+        to: custodian,
+        amount: share,
+        sessionId: s.id,
+        // stable identity: this exact sub slot in this exact session.
+        // Paid status is keyed to this, so it never drifts when other sessions change.
+        gid: 'g|' + s.id + '|' + si
+      });
+    });
   }
 
-  return { playerAdj, subDebts };
+  PLAYERS.forEach(p => playerAdj[p] = r2(playerAdj[p]));
+  return { playerAdj, guestPayments };
 }
 
-// Legacy helper used by dashboard
-function calcBalances() {
-  return calcAllBalances().playerAdj;
+// Legacy helper used by the dashboard
+function calcBalances() { return calcAllBalances().playerAdj; }
+
+// ── SETTLEMENT BUILDER ─────────────────────────────────────────────
+// Produces the minimal set of transfers.
+//   1. Guest transfers: each sub → the present player who collected their cash.
+//   2. Among the five originals: a custodian's balance drops by the cash they
+//      hold (they must forward it), then a greedy match settles everyone with
+//      the fewest transfers. Every euro reconciles to zero.
+function buildSettlement(playerAdj, guestPayments) {
+  const bal = {};
+  PLAYERS.forEach(p => bal[p] = playerAdj[p]);
+
+  // One transfer per substitute occurrence, each carrying its stable id.
+  // (No cross-session merging — that's what let a paid guest "reappear".)
+  const guestTxs = [];
+  for (const g of guestPayments) {
+    bal[g.to] = r2(bal[g.to] - g.amount); // custodian holds it, owes it forward
+    guestTxs.push({ from: g.name, to: g.to, amount: g.amount, isGuest: true, gid: g.gid, sessionId: g.sessionId });
+  }
+
+  // greedy minimal settlement among the five originals
+  const debtors   = PLAYERS.filter(p => bal[p] < -0.005).map(p => ({ name: p, amt: -bal[p] })).sort((a,b) => b.amt - a.amt);
+  const creditors = PLAYERS.filter(p => bal[p] >  0.005).map(p => ({ name: p, amt:  bal[p] })).sort((a,b) => b.amt - a.amt);
+  const playerTxs = [];
+  let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const pay = r2(Math.min(debtors[i].amt, creditors[j].amt));
+    if (pay > 0.005) playerTxs.push({ from: debtors[i].name, to: creditors[j].name, amount: pay, isGuest: false });
+    debtors[i].amt = r2(debtors[i].amt - pay);
+    creditors[j].amt = r2(creditors[j].amt - pay);
+    if (debtors[i].amt < 0.005) i++;
+    if (creditors[j].amt < 0.005) j++;
+  }
+
+  return { guestTxs, playerTxs };
 }
 
-// ── RENDER ─────────────────────────────────────────────────────────
+// ── RENDER: DASHBOARD ──────────────────────────────────────────────
 function renderDashboard() {
   const adj = calcBalances();
   const n = sessions.length;
@@ -671,10 +672,10 @@ function renderDashboard() {
   grid.innerHTML = '';
   for (const p of PLAYERS) {
     const val = adj[p];
-    const attended = sessions.filter(s => (s.present || []).includes(p)).length;
+    const attended = sessions.filter(s => presentOf(s).includes(p)).length;
     const cls = val > 0.01 ? 'positive' : val < -0.01 ? 'negative' : '';
     const amtCls = val > 0.01 ? 'pos' : val < -0.01 ? 'neg' : 'zero';
-    const sign = val > 0.01 ? '+' : '';
+    const sign = val > 0.01 ? '+' : val < -0.01 ? '−' : '';
     grid.innerHTML += `
       <div class="balance-card ${cls}">
         <div class="player-info">
@@ -684,11 +685,12 @@ function renderDashboard() {
             <div class="player-sessions">${attended} session${attended !== 1 ? 's' : ''} attended</div>
           </div>
         </div>
-        <div class="balance-amount ${amtCls}">${sign}€${Math.abs(val).toFixed(2)}</div>
+        <div class="balance-amount ${amtCls}">${sign}${eur(val)}</div>
       </div>`;
   }
 }
 
+// ── RENDER: SESSIONS ───────────────────────────────────────────────
 function renderSessions() {
   const list = document.getElementById('sessions-list');
   if (sessions.length === 0) {
@@ -698,19 +700,15 @@ function renderSessions() {
   list.innerHTML = '';
   sessions.slice().reverse().forEach((s, ri) => {
     const i = sessions.length - 1 - ri;
-    const present = s.present || [];
-    const absent = PLAYERS.filter(p => !present.includes(p));
+    const present = presentOf(s);
+    const absent  = absentOf(s);
+    const share   = shareOf(s);
     const chips = present.map(p => `<span class="player-chip present">${p}</span>`).join('');
     const absentChips = absent.map(p => `<span class="player-chip absent">${p}</span>`).join('');
-    const numSubs = (s.subs || []).length;
-    const slotsFilledBySubs = Math.min(numSubs, absent.length);
-    const remainingAbsent = absent.length - slotsFilledBySubs;
-    const allPresent = present.length + numSubs;
-    const splitCost = remainingAbsent > 0 && allPresent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
-    const guestOwes = absent.length > 0 ? PER_PERSON + splitCost : 0;
-    const subChips = (s.subs || []).map(sub =>
-      `<span class="player-chip sub">${sub.name}${guestOwes > 0 ? ` · €${guestOwes.toFixed(2)}` : ''}</span>`
-    ).join('');
+    const subChips = (s.subs || []).map(sub => {
+      const to = (sub.paidTo && present.includes(sub.paidTo)) ? sub.paidTo : (present[0] || '?');
+      return `<span class="player-chip sub">${sub.name} → ${to} · ${eur(share)}</span>`;
+    }).join('');
     list.innerHTML += `
       <div class="session-card" onclick="openEditSession('${s.id}')">
         <div class="session-header">
@@ -722,8 +720,9 @@ function renderSessions() {
   });
 }
 
+// ── RENDER: SETTLE UP ──────────────────────────────────────────────
 function renderSettle() {
-  const { playerAdj, subDebts } = calcAllBalances();
+  const { playerAdj, guestPayments } = calcAllBalances();
   const content = document.getElementById('settle-content');
 
   if (sessions.length === 0) {
@@ -731,84 +730,31 @@ function renderSettle() {
     return;
   }
 
-  // ── Compute the FULL planned transaction list (ignore payments) ───
-  // This is what the settle-up SHOULD look like from scratch.
-  // We apply payments separately just to know which transactions are done.
+  const { guestTxs, playerTxs } = buildSettlement(playerAdj, guestPayments);
+  SETTLE_TXS = [...guestTxs, ...playerTxs];
 
-  function computeTransactions(playerAdj, subDebts) {
-    const bal = {};
-    PLAYERS.forEach(p => bal[p] = playerAdj[p]);
-
-    const guestTxs = [];
-    const forwardTxs = [];
-
-    for (const [guestName, guestAmt] of Object.entries(subDebts)) {
-      if (guestAmt < 0.01) continue;
-
-      // Pick the most-indebted player as the single collector
-      const collector = PLAYERS.slice().sort((a, b) => bal[a] - bal[b])[0];
-      guestTxs.push({ from: guestName, to: collector, amount: guestAmt, isGuest: true });
-
-      // Collector's own debt is wiped by the guest payment (partially or fully)
-      // Then they must pay ALL creditors their full owed amounts
-      // (funded by guest cash + their own pocket for any remainder)
-      bal[collector] += guestAmt; // collector now has extra cash
-
-      // Generate forward payments: collector pays every creditor their full balance
-      const creditorsSorted = PLAYERS
-        .filter(p => p !== collector && bal[p] > 0.01)
-        .sort((a, b) => bal[b] - bal[a]);
-
-      for (const creditor of creditorsSorted) {
-        forwardTxs.push({ from: collector, to: creditor, amount: bal[creditor], isGuest: false, isForward: true });
-        bal[collector] -= bal[creditor];
-        bal[creditor] = 0;
-      }
-
-      // Collector balance should now be ~0 (or small rounding)
-      bal[collector] = 0;
-    }
-
-    // Settle any remaining player balances (sessions without subs)
-    const playerTxs = [];
-    const debtors   = PLAYERS.filter(p => bal[p] < -0.01).map(p => ({ name: p, amt: -bal[p] })).sort((a,b) => b.amt - a.amt);
-    const creditors = PLAYERS.filter(p => bal[p] >  0.01).map(p => ({ name: p, amt:  bal[p] })).sort((a,b) => b.amt - a.amt);
-    const d = debtors.map(x => ({...x}));
-    const c = creditors.map(x => ({...x}));
-    while (d.length && c.length) {
-      const pay = Math.min(d[0].amt, c[0].amt);
-      playerTxs.push({ from: d[0].name, to: c[0].name, amount: pay, isGuest: false });
-      d[0].amt -= pay; c[0].amt -= pay;
-      if (d[0].amt < 0.01) d.shift();
-      if (c[0].amt < 0.01) c.shift();
-    }
-
-    return [...guestTxs, ...forwardTxs, ...playerTxs];
-  }
-
-  const allTransactions = computeTransactions(playerAdj, subDebts);
-
-  // ── Track which transactions are settled via recorded payments ────
-  // A transaction is "paid" if payments cover its full amount
-  const paidAmounts = {}; // key: "from→to" → total paid
+  // which transfers are already covered by recorded payments
+  const paidAmounts = {};
+  const paidGids = new Set();
   for (const pay of payments) {
-    const key = `${pay.from_player}→${pay.to_player}`;
-    paidAmounts[key] = (paidAmounts[key] || 0) + Number(pay.amount);
+    const key = `${pay.from_player}\u0000${pay.to_player}`;
+    paidAmounts[key] = r2((paidAmounts[key] || 0) + Number(pay.amount));
+    if (pay.note && pay.note.indexOf('g|') === 0) paidGids.add(pay.note);
   }
+  // Guests: settled status is locked to the substitute's stable id, so it can
+  // never come undone when you add later sessions. (Fall back to the old
+  // from→to match so guests marked paid before this update still count.)
+  // Players: matched by who-pays-whom; this set is provisional until the season's done.
+  const isPaid = (tx) => tx.isGuest
+    ? (paidGids.has(tx.gid) || (paidAmounts[`${tx.from}\u0000${tx.to}`] || 0) >= tx.amount - 0.01)
+    : (paidAmounts[`${tx.from}\u0000${tx.to}`] || 0) >= tx.amount - 0.01;
 
-  function isPaid(tx) {
-    const key = `${tx.from}→${tx.to}`;
-    return (paidAmounts[key] || 0) >= tx.amount - 0.01;
-  }
+  // how much each present player collects from guests (for the "use it toward" note)
+  const collected = {};
+  for (const g of guestTxs) collected[g.to] = r2((collected[g.to] || 0) + g.amount);
 
-  // Build collected-from-guests map for the "pay forward" note
-  const collectedFromGuests = {};
-  for (const tx of allTransactions.filter(t => t.isGuest)) {
-    collectedFromGuests[tx.to] = (collectedFromGuests[tx.to] || 0) + tx.amount;
-  }
-
-  const pending = allTransactions.filter(tx => !isPaid(tx));
-  const done    = allTransactions.filter(tx => isPaid(tx));
+  const pending = SETTLE_TXS.filter(tx => !isPaid(tx));
+  const done    = SETTLE_TXS.filter(tx =>  isPaid(tx));
 
   let html = '';
 
@@ -820,22 +766,24 @@ function renderSettle() {
     </div>`;
   } else {
     html += `<div class="section-title" style="margin-bottom:10px;">Pending Payments</div>`;
-    const shownCollectedNote = new Set();
+    const shownCollected = new Set();
 
-    for (const tx of pending) {
-      let extraNote = '';
+    pending.forEach(tx => {
+      const idx = SETTLE_TXS.indexOf(tx);
+      let note = '';
 
       if (tx.isGuest) {
-        extraNote = `<div style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6;">
-          👤 Guest — pays once. <strong style="color:var(--text)">${tx.to}</strong> collects and distributes onward.
+        const sIdx = sessions.findIndex(s => s.id === tx.sessionId);
+        const sLabel = sIdx >= 0 ? ` (Session ${sIdx + 1})` : '';
+        note = `<div style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6;">
+          👤 Guest pays once${sLabel}. <strong style="color:var(--text)">${tx.to}</strong> collects the cash and forwards it on.
         </div>`;
-      } else if (collectedFromGuests[tx.from] && !shownCollectedNote.has(tx.from)) {
-        const collected = collectedFromGuests[tx.from];
-        const guestNames = allTransactions.filter(g => g.isGuest && g.to === tx.from).map(g => g.from).join(', ');
-        extraNote = `<div style="font-size:12px;background:#0a1a2a;border:1px solid #1a3a5a;border-radius:8px;padding:10px;margin-top:10px;line-height:1.7;color:var(--muted);">
-          💰 <strong style="color:var(--accent2)">${tx.from}</strong> collected <strong style="color:var(--accent2)">€${collected.toFixed(2)}</strong> from ${guestNames} — use it toward these payments
+      } else if (collected[tx.from] && !shownCollected.has(tx.from)) {
+        const guestNames = guestTxs.filter(g => g.to === tx.from).map(g => g.from).join(', ');
+        note = `<div style="font-size:12px;background:#0a1a2a;border:1px solid #1a3a5a;border-radius:8px;padding:10px;margin-top:10px;line-height:1.7;color:var(--muted);">
+          💰 <strong style="color:var(--accent2)">${tx.from}</strong> collected <strong style="color:var(--accent2)">${eur(collected[tx.from])}</strong> from ${guestNames} — put it toward these payments.
         </div>`;
-        shownCollectedNote.add(tx.from);
+        shownCollected.add(tx.from);
       }
 
       html += `
@@ -846,47 +794,41 @@ function renderSettle() {
               <span class="tx-arrow">→</span>
               <span class="tx-to">${tx.to}</span>
             </div>
-            <div class="tx-amount">€${tx.amount.toFixed(2)}</div>
+            <div class="tx-amount">${eur(tx.amount)}</div>
           </div>
-          ${extraNote}
-          <button class="pay-btn" onclick="markPaid('${tx.from}','${tx.to}',${tx.amount.toFixed(2)})">
-            ✓ Mark as Paid
-          </button>
+          ${note}
+          <button class="pay-btn" onclick="markPaidIdx(${idx})">✓ Mark as Paid</button>
         </div>`;
-    }
+    });
   }
 
-  // Settled transactions (greyed out)
   if (done.length > 0) {
     html += `<div class="section-title" style="margin-top:24px;margin-bottom:10px;">Completed</div>`;
-    for (const tx of done) {
+    done.forEach(tx => {
       html += `
-        <div class="tx-card" style="opacity:0.4;">
+        <div class="tx-card settled">
           <div class="tx-row">
             <div class="tx-players">
               <span class="tx-from">${tx.from}${tx.isGuest ? ' 👤' : ''}</span>
               <span class="tx-arrow">→</span>
               <span class="tx-to">${tx.to}</span>
             </div>
-            <div class="tx-amount" style="color:var(--muted);">€${tx.amount.toFixed(2)}</div>
+            <div class="tx-amount">${eur(tx.amount)}</div>
           </div>
           <div style="font-size:11px;color:var(--muted);margin-top:8px;">✓ Paid</div>
         </div>`;
-    }
+    });
   }
 
-  // Payment history log
   if (payments.length > 0) {
     html += `<div class="section-title" style="margin-top:24px;margin-bottom:10px;">Payment History</div>`;
     html += `<div class="stat-card" style="margin-bottom:20px;">`;
     for (const pay of [...payments].reverse()) {
       html += `
         <div class="hist-item">
-          <div class="hist-players">
-            <strong>${pay.from_player}</strong> <span>paid</span> <strong>${pay.to_player}</strong>
-          </div>
+          <div class="hist-players"><strong>${pay.from_player}</strong> <span>paid</span> <strong>${pay.to_player}</strong></div>
           <div class="hist-right">
-            <div class="hist-amount">€${Number(pay.amount).toFixed(2)}</div>
+            <div class="hist-amount">${eur(Number(pay.amount))}</div>
             <div class="hist-date">${formatDate(pay.paid_at ? pay.paid_at.split('T')[0] : '')}</div>
             <button class="undo-btn" onclick="undoPayment('${pay.id}')">undo</button>
           </div>
@@ -895,16 +837,18 @@ function renderSettle() {
     html += `</div>`;
   }
 
-  html += `<div class="info-box">💡 Guest players (👤) pay one person only. That person distributes onward — all shown above.</div>`;
+  html += `<div class="info-box">💡 Guest players (👤) pay one person only. That person forwards the cash as part of the transfers above. Totals always reconcile to zero.</div>`;
   content.innerHTML = html;
 }
 
-async function markPaid(from, to, amount) {
+async function markPaidIdx(idx) {
+  const tx = SETTLE_TXS[idx];
+  if (!tx) return;
   setSyncing(); startLoading();
   try {
-    await insertPayment(from, to, amount, '');
+    await insertPayment(tx.from, tx.to, r2(tx.amount), tx.isGuest ? (tx.gid || '') : '');
     await loadPayments();
-    showToast(`${from} → ${to} marked paid ✓`, 'success');
+    showToast(`${tx.from} → ${tx.to} marked paid ✓`, 'success');
     renderSettle();
     setSynced();
   } catch(e) {
@@ -950,8 +894,8 @@ function openEditSession(id) {
   if (!s) return;
   editingId = id;
   playerPresence = {};
-  PLAYERS.forEach(p => playerPresence[p] = (s.present || []).includes(p));
-  subRows = (s.subs || []).map(sub => ({ name: sub.name }));
+  PLAYERS.forEach(p => playerPresence[p] = presentOf(s).includes(p));
+  subRows = (s.subs || []).map(sub => ({ name: sub.name || '', paidTo: sub.paidTo || '' }));
   document.getElementById('session-date').value = s.date;
   const idx = sessions.findIndex(x => x.id === id);
   document.getElementById('modal-title-text').textContent = `Session ${idx + 1}`;
@@ -977,60 +921,71 @@ function renderPlayerToggles() {
   }
 }
 
-function addSubRow() { subRows.push({ name: '' }); renderSubRows(); updateCalcPreview(); }
+function addSubRow() {
+  const present = PLAYERS.filter(p => playerPresence[p]);
+  subRows.push({ name: '', paidTo: present[0] || '' });
+  renderSubRows(); updateCalcPreview();
+}
 function removeSubRow(i) { subRows.splice(i, 1); renderSubRows(); updateCalcPreview(); }
 
 function renderSubRows() {
-  const absent = PLAYERS.filter(p => !playerPresence[p]);
-  const numAbsent = absent.length;
-  const numSubs = subRows.length;
-  const allPresent = PLAYERS.filter(p => playerPresence[p]).length + numSubs;
-  const slotsFilledBySubs = Math.min(numSubs, numAbsent);
-  const remainingAbsent = numAbsent - slotsFilledBySubs;
-  const splitCost = remainingAbsent > 0 && allPresent > 0 ? (remainingAbsent * PER_PERSON) / allPresent : 0;
-  const guestOwes = numAbsent > 0 ? PER_PERSON + splitCost : 0;
+  const present = PLAYERS.filter(p => playerPresence[p]);
+  const onCourt = present.length + subRows.length;
+  const share = onCourt > 0 ? SESSION_COST / onCourt : 0;
+  const hasAbsent = present.length < PLAYERS.length;
 
   const container = document.getElementById('subs-list');
   container.innerHTML = '';
   subRows.forEach((sub, i) => {
-    const badge = guestOwes > 0
-      ? `<span style="font-size:11px;color:var(--accent2);background:#0a1a2a;border:1px solid #1a3a5a;border-radius:20px;padding:3px 10px;flex-shrink:0;">owes €${guestOwes.toFixed(2)}</span>
-         <span style="font-size:11px;color:var(--muted);">€${PER_PERSON.toFixed(2)} slot + €${splitCost.toFixed(2)} split</span>`
-      : `<span style="font-size:11px;color:var(--muted);">no absent players — owes €0</span>`;
+    if (!present.includes(sub.paidTo)) { sub.paidTo = present[0] || ''; }
+    const options = present.length
+      ? present.map(p => `<option value="${p}" ${p === sub.paidTo ? 'selected' : ''}>${p}</option>`).join('')
+      : `<option value="">— no present player —</option>`;
+    const badge = hasAbsent && share > 0
+      ? `<span style="font-size:11px;color:var(--accent2);background:#0a1a2a;border:1px solid #1a3a5a;border-radius:20px;padding:3px 10px;flex-shrink:0;">pays ${eur(share)}</span>`
+      : `<span style="font-size:11px;color:var(--muted);">no one absent — pays €0</span>`;
     container.innerHTML += `
-      <div style="margin-bottom:10px;">
+      <div style="margin-bottom:14px;">
         <div class="sub-row">
-          <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview();renderSubRows()">
+          <input type="text" placeholder="Sub's name" value="${sub.name}" oninput="subRows[${i}].name=this.value;updateCalcPreview()">
           <button class="remove-sub" onclick="removeSubRow(${i})">✕</button>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">${badge}</div>
+        <div class="sub-paidto-row">
+          <span class="paid-label">paid →</span>
+          <select class="sub-select" onchange="subRows[${i}].paidTo=this.value;renderSessionsHintNoop()">${options}</select>
+          ${badge}
+        </div>
       </div>`;
   });
 }
+function renderSessionsHintNoop() { /* keep select binding cheap; no full re-render needed */ }
 
 function updateCalcPreview() {
   const present = PLAYERS.filter(p => playerPresence[p]);
-  const absent = PLAYERS.filter(p => !playerPresence[p]);
-  const subs = subRows.filter(s => s.name.trim());
-  const totalPresent = present.length + subs.length;
+  const absent  = PLAYERS.filter(p => !playerPresence[p]);
+  const subs    = subRows.filter(s => s.name.trim());
+  const onCourt = present.length + subs.length;
   const content = document.getElementById('calc-content');
-  if (absent.length === 0) {
-    content.innerHTML = `<div class="calc-row highlight">All 5 players — no redistribution ✓</div>`; return;
+
+  if (absent.length === 0 && subs.length === 0) {
+    content.innerHTML = `<div class="calc-row highlight">All 5 players — no redistribution ✓</div>`;
+    return;
   }
-  const extraPerPresent = totalPresent > 0 ? (absent.length * PER_PERSON) / totalPresent : 0;
-  let html = `<div class="calc-row"><span>Base per player</span><span>€${PER_PERSON.toFixed(2)}</span></div>`;
+  if (onCourt === 0) { content.innerHTML = `<div class="calc-row danger">No one on court.</div>`; return; }
+
+  const share = SESSION_COST / onCourt;
+  let html = `<div class="calc-row"><span>People on court</span><span>${onCourt}</span></div>`;
+  html += `<div class="calc-row"><span>Share each (€57 ÷ ${onCourt})</span><span>${eur(share)}</span></div>`;
   html += `<hr style="border-color:var(--border);margin:6px 0">`;
-  html += `<div class="calc-row danger"><span>Absent: ${absent.join(', ')}</span></div>`;
-  html += `<div class="calc-row highlight"><span>Each absent gets back</span><span>+€${PER_PERSON.toFixed(2)}</span></div>`;
-  html += `<div class="calc-row danger"><span>Each present pays extra</span><span>-€${extraPerPresent.toFixed(2)}</span></div>`;
-  if (subs.length > 0) {
-    const slotsFilledBySubs = Math.min(subs.length, absent.length);
-    const remainingAbsent = absent.length - slotsFilledBySubs;
-    const splitCost = remainingAbsent > 0 && totalPresent > 0 ? (remainingAbsent * PER_PERSON) / totalPresent : 0;
-    const guestTotal = absent.length > 0 ? PER_PERSON + splitCost : 0;
+  if (absent.length) {
+    html += `<div class="calc-row danger"><span>Absent: ${absent.join(', ')}</span></div>`;
+    html += `<div class="calc-row highlight"><span>Each absent gets back</span><span>+${eur(PER_PERSON)}</span></div>`;
+    html += `<div class="calc-row danger"><span>Each present pays extra</span><span>−${eur(share - PER_PERSON)}</span></div>`;
+  }
+  if (subs.length) {
     html += `<hr style="border-color:var(--border);margin:6px 0">`;
-    html += `<div class="calc-row" style="color:var(--accent2);font-weight:600;"><span>⚡ Each guest pays</span><span>€${guestTotal.toFixed(2)}</span></div>`;
-    html += `<div style="font-size:11px;color:var(--muted);margin-top:2px;">€${PER_PERSON.toFixed(2)} fills one absent slot + €${splitCost.toFixed(2)} share of remaining</div>`;
+    html += `<div class="calc-row" style="color:var(--accent2);font-weight:600;"><span>⚡ Each guest pays</span><span>${eur(share)}</span></div>`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-top:2px;">Paid in cash to the chosen present player, who forwards it on.</div>`;
   }
   content.innerHTML = html;
 }
@@ -1040,21 +995,17 @@ async function saveSession() {
   if (!date) { showToast('Please select a date', 'error'); return; }
   const present = PLAYERS.filter(p => playerPresence[p]);
   if (present.length === 0) { showToast('At least one player must attend', 'error'); return; }
-  const subs = subRows.filter(s => s.name.trim()).map(s => ({ name: s.name.trim() }));
+  const subs = subRows
+    .filter(s => s.name.trim())
+    .map(s => ({ name: s.name.trim(), paidTo: present.includes(s.paidTo) ? s.paidTo : present[0] }));
   const payload = { date, present, subs };
 
   const btn = document.getElementById('save-btn');
   btn.disabled = true; btn.textContent = 'Saving...';
   startLoading(); setSyncing();
-
   try {
-    if (editingId) {
-      await updateSession(editingId, payload);
-      showToast('Session updated ✓', 'success');
-    } else {
-      await insertSession(payload);
-      showToast('Session saved ✓', 'success');
-    }
+    if (editingId) { await updateSession(editingId, payload); showToast('Session updated ✓', 'success'); }
+    else           { await insertSession(payload);            showToast('Session saved ✓', 'success'); }
     await loadSessions();
     closeModal();
     renderAll();
@@ -1101,8 +1052,6 @@ function formatDate(str) {
   return new Date(str + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function showConfigScreen() {} // no-op, kept for safety
-
 // ── INIT ───────────────────────────────────────────────────────────
 async function init() {
   startLoading();
@@ -1116,15 +1065,9 @@ document.getElementById('modal-overlay').addEventListener('click', function(e) {
   if (e.target === this) closeModal();
 });
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
-}
+if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(() => {}); }
 
-if (checkLogin()) {
-  init();
-} else {
-  document.getElementById('login-screen').classList.add('show');
-}
+if (checkLogin()) { init(); } else { document.getElementById('login-screen').classList.add('show'); }
 </script>
 </body>
 </html>
